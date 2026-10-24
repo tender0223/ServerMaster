@@ -164,41 +164,56 @@ namespace ServerMaster.Services
 
         /// <summary>
         /// 批量注入队列中的按键（UI 线程 Timer 30ms 一批）。
-        /// 关键：mstscax 只处理"自己持有键盘焦点"时的输入——注入前把焦点
-        /// 临时切到目标控件，整批重放后立刻还原给原焦点（通常为主控分格）。
+        /// 注入方式：焦点切到目标控件 + keybd_event 真实键盘事件——
+        /// 真实事件走系统全部输入路径(原始输入/消息队列/按键状态)，mstscax 无论
+        /// 监听哪条路都能收到；事件带 LLKHF_INJECTED 标志，我们的钩子会跳过(无自环)。
+        /// 注入后保持焦点短暂等待事件消化，再还原给原焦点(通常为主控分格)。
         /// </summary>
         private void DrainPendingKeys()
         {
+            if (_draining) return;
             if (_pending.Count == 0 || _targets.Count == 0) return;
 
-            List<KeyEvent> batch = new List<KeyEvent>();
-            while (_pending.Count > 0 && batch.Count < 24) batch.Add(_pending.Dequeue());
-
-            IntPtr prev = NativeMethods.GetFocus();
-            RdpSession[] targets = _targets.ToArray();
-            int sent = 0;
-            foreach (RdpSession t in targets)
+            _draining = true;
+            try
             {
-                IntPtr h = t.Handle;
-                if (h == IntPtr.Zero) continue;
-                NativeMethods.SetFocus(h);
-                foreach (KeyEvent e in batch)
+                List<KeyEvent> batch = new List<KeyEvent>();
+                while (_pending.Count > 0 && batch.Count < 24) batch.Add(_pending.Dequeue());
+
+                IntPtr prev = NativeMethods.GetFocus();
+                RdpSession[] targets = _targets.ToArray();
+                foreach (RdpSession t in targets)
                 {
-                    t.PostVirtualKey(e.Vk, e.Scan, e.Ext, e.Up);
-                    sent++;
+                    IntPtr h = t.Handle;
+                    if (h == IntPtr.Zero) continue;
+                    NativeMethods.SetFocus(h);
+                    foreach (KeyEvent e in batch)
+                    {
+                        uint flags = e.Up ? NativeMethods.KEYEVENTF_KEYUP : 0;
+                        if (e.Ext) flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
+                        NativeMethods.keybd_event((byte)e.Vk, (byte)e.Scan, flags, UIntPtr.Zero);
+                    }
+                    // keybd_event 是异步进入系统输入队列的:保持焦点等待消化,避免键落入已还原的主控
+                    Application.DoEvents();
+                    System.Threading.Thread.Sleep(30);
+                }
+                IntPtr restore = prev != IntPtr.Zero ? prev : _masterRoot;
+                if (restore != IntPtr.Zero) NativeMethods.SetFocus(restore);
+
+                if (_dbgBudget > 0)
+                {
+                    _dbgBudget--;
+                    AppLogger.Info(string.Format("真实键注入(keybd_event): {0} 个事件 × {1} 个目标 (焦点已还原)",
+                        batch.Count, targets.Length));
                 }
             }
-            // 还原焦点(优先原焦点，否则主控)
-            IntPtr restore = prev != IntPtr.Zero ? prev : _masterRoot;
-            if (restore != IntPtr.Zero) NativeMethods.SetFocus(restore);
-
-            if (_dbgBudget > 0)
+            finally
             {
-                _dbgBudget--;
-                AppLogger.Info(string.Format("焦点轮转注入: {0} 个事件 × {1} 个目标 (焦点已还原)",
-                    batch.Count, targets.Length));
+                _draining = false;
             }
         }
+
+        private bool _draining;
 
         /// <summary>主控判定：本程序在前台，且主控 RDP 控件（或其内部子窗口）持有键盘焦点。</summary>
         private bool MasterHasFocus()

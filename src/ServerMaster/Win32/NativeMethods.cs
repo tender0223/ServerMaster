@@ -132,6 +132,13 @@ namespace ServerMaster.Win32
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr GetModuleHandle(string lpModuleName);
 
+        // ---- 真实键盘事件注入 ----
+        public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
+        public const uint KEYEVENTF_KEYUP = 0x0002;
+
+        [DllImport("user32.dll")]
+        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
         // ---- lParam 工具 ----
         public static IntPtr MAKELPARAM(int low, int high)
         {
