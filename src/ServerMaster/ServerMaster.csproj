@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>ServerMaster</RootNamespace>
+    <AssemblyName>ServerMaster</AssemblyName>
+    <Version>0.2.0</Version>
+    <Product>ServerMaster 多服务器批量管理工具</Product>
+    <Description>多画面 RDP 同屏 / 键鼠广播 / 批量文件传输 (基于微软官方 mstscax ActiveX)</Description>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AxImp 从系统 mstscax.dll 生成的互操作程序集（见 lib/ 与 docs/设计文档.md） -->
+    <Reference Include="AxMSTSCLib">
+      <HintPath>..\..\lib\AxMSTSCLib.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="MSTSCLib">
+      <HintPath>..\..\lib\MSTSCLib.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+</Project>
