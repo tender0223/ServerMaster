@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.8\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.9\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -769,26 +769,38 @@ namespace ServerMaster.UI
                 RdpSession s = targets[i];
                 bool useSendKeys = (i % 2 == 0); // 双通道分流: 第0台SendKeys, 第1台PostMessage
                 string channel = useSendKeys ? "SendKeys扫描码" : "PostMessage按键";
-                AppLogger.Info("注入测试: [" + s.Server.DisplayName + "] 通道=" + channel + " 发送 " + text + "+回车");
-                ShowMsg("注入测试: [" + s.Server.DisplayName + "] 用「" + channel + "」发送 notepad+回车 —— 看该服务器是否弹出记事本");
+                AppLogger.Info("注入测试(带焦点轮转): [" + s.Server.DisplayName + "] 通道=" + channel + " 发送 " + text + "+回车");
+                ShowMsg("注入测试: [" + s.Server.DisplayName + "] 焦点轮转+「" + channel + "」发送 notepad+回车 —— 看该服务器是否弹出记事本");
 
-                foreach (char c in text)
+                IntPtr h = s.Handle;
+                if (h == IntPtr.Zero) continue;
+                IntPtr prevFocus = Win32.NativeMethods.GetFocus();
+                Win32.NativeMethods.SetFocus(h); // mstscax 只处理持有焦点时的输入
+                try
                 {
-                    short ks = Win32.NativeMethods.VkKeyScanW(c);
-                    int vk = ks & 0xFF;
-                    int scan = (int)Win32.NativeMethods.MapVirtualKey((uint)vk, 0);
-                    if (scan == 0)
+                    foreach (char c in text)
                     {
-                        int s2; bool ext;
-                        if (!KeyMapper.TryGetScanCode((Keys)vk, out s2, out ext)) scan = 0; else scan = s2;
+                        short ks = Win32.NativeMethods.VkKeyScanW(c);
+                        int vk = ks & 0xFF;
+                        int scan = (int)Win32.NativeMethods.MapVirtualKey((uint)vk, 0);
+                        if (scan == 0)
+                        {
+                            int s2; bool ext;
+                            if (KeyMapper.TryGetScanCode((Keys)vk, out s2, out ext)) scan = s2;
+                        }
+                        if (scan != 0) TypeTestKey(s, vk, scan, useSendKeys);
+                        System.Threading.Thread.Sleep(20);
                     }
-                    TypeTestKey(s, vk, scan, useSendKeys);
-                    System.Threading.Thread.Sleep(20);
+                    TypeTestKey(s, 0x0D, 0x1C, useSendKeys); // Enter
+                    System.Threading.Thread.Sleep(30);
                 }
-                TypeTestKey(s, 0x0D, 0x1C, useSendKeys); // Enter
-                System.Threading.Thread.Sleep(20);
+                finally
+                {
+                    IntPtr restore = prevFocus != IntPtr.Zero ? prevFocus : h;
+                    Win32.NativeMethods.SetFocus(restore);
+                }
             }
-            AppLogger.Info("注入测试完成: 共 " + targets.Count + " 台。哪台远端弹出记事本=对应通道有效");
+            AppLogger.Info("注入测试完成: 共 " + targets.Count + " 台(带焦点轮转)。哪台远端弹出记事本=对应通道有效");
         }
 
         private static void TypeTestKey(RdpSession s, int vk, int scan, bool useSendKeys)
@@ -975,12 +987,19 @@ namespace ServerMaster.UI
             {
                 timer.Stop();
                 timer.Dispose();
+                // 带焦点轮转的 Ctrl+V 注入（mstscax 只处理持有焦点时的输入）
                 foreach (RdpSession s in targets)
                 {
+                    IntPtr h = s.Handle;
+                    if (h == IntPtr.Zero) continue;
+                    IntPtr prevFocus = Win32.NativeMethods.GetFocus();
+                    Win32.NativeMethods.SetFocus(h);
                     s.PostVirtualKey(0x11, 0x1D, false, false); // Ctrl 按下
                     s.PostVirtualKey(0x56, 0x2F, false, false); // V 按下
                     s.PostVirtualKey(0x56, 0x2F, false, true);  // V 抬起
                     s.PostVirtualKey(0x11, 0x1D, false, true);  // Ctrl 抬起
+                    IntPtr restore = prevFocus != IntPtr.Zero ? prevFocus : h;
+                    Win32.NativeMethods.SetFocus(restore);
                 }
                 ShowMsg("批量推送：已向 " + targets.Count + " 台(" + string.Join("、", names.ToArray()) +
                         ")发送粘贴指令，文件将出现在远端桌面/当前聚焦窗口");

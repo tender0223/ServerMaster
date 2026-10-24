@@ -25,6 +25,16 @@ namespace ServerMaster.Services
         private readonly NativeMethods.HookProc _hookProc; // 强引用防委托被 GC
         private int _dbgBudget;      // 每次开启广播后的调试日志条数预算
         private long _mirroredKeys;  // 已镜像按键计数(状态栏显示)
+        private readonly Timer _drainTimer; // 按键事件批处理(焦点轮转注入)
+        private readonly Queue<KeyEvent> _pending = new Queue<KeyEvent>();
+
+        private struct KeyEvent
+        {
+            public int Vk;
+            public int Scan;
+            public bool Ext;
+            public bool Up;
+        }
 
         /// <summary>已镜像的按键总数（用于状态栏实时反馈）。</summary>
         public long MirroredKeyCount { get { return _mirroredKeys; } }
@@ -32,6 +42,9 @@ namespace ServerMaster.Services
         public InputBroadcastService()
         {
             _hookProc = new NativeMethods.HookProc(KeyboardHookProc);
+            _drainTimer = new Timer();
+            _drainTimer.Interval = 30;
+            _drainTimer.Tick += delegate { DrainPendingKeys(); };
         }
 
         /// <summary>广播总开关（工具栏切换）。</summary>
@@ -66,8 +79,9 @@ namespace ServerMaster.Services
         {
             if (Enabled) return;
             Enabled = true;
-            _dbgBudget = 60;
+            _dbgBudget = 40;
             _mirroredKeys = 0;
+            _pending.Clear();
             if (_hookId == IntPtr.Zero)
             {
                 IntPtr mod = NativeMethods.GetModuleHandle(null);
@@ -75,11 +89,14 @@ namespace ServerMaster.Services
                     _hookProc, mod, 0);
                 AppLogger.Info("键盘广播钩子安装: " + (_hookId != IntPtr.Zero ? "OK" : "失败 err=" + Marshal.GetLastWin32Error()));
             }
+            _drainTimer.Start();
         }
 
         public void Disable()
         {
             Enabled = false;
+            _drainTimer.Stop();
+            _pending.Clear();
             if (_hookId != IntPtr.Zero)
             {
                 NativeMethods.UnhookWindowsHookEx(_hookId);
@@ -98,45 +115,89 @@ namespace ServerMaster.Services
                 {
                     NativeMethods.KBDLLHOOKSTRUCT k =
                         (NativeMethods.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(NativeMethods.KBDLLHOOKSTRUCT));
-                    bool keyUp = (k.flags & NativeMethods.LLKHF_UP) != 0;
-                    bool extended = (k.flags & NativeMethods.LLKHF_EXTENDED) != 0;
-                    int vk = (int)k.vkCode;
-                    int scan = (int)k.scanCode;
-                    if (scan == 0)
+                    // 跳过程序注入的事件（防自环）
+                    if ((k.flags & NativeMethods.LLKHF_INJECTED) == 0)
                     {
-                        int s;
-                        bool ext;
-                        if (KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) { scan = s; extended = ext; }
-                    }
-
-                    if (MasterHasFocus())
-                    {
-                        if (_dbgBudget > 0)
+                        bool keyUp = (k.flags & NativeMethods.LLKHF_UP) != 0;
+                        bool extended = (k.flags & NativeMethods.LLKHF_EXTENDED) != 0;
+                        int vk = (int)k.vkCode;
+                        int scan = (int)k.scanCode;
+                        if (scan == 0)
                         {
-                            _dbgBudget--;
-                            AppLogger.Info(string.Format(
-                                "钩子按键 vk=0x{0:X2} scan=0x{1:X2} up={2} → 镜像到 {3} 个目标",
-                                vk, scan, keyUp, _targets.Count));
+                            int s;
+                            bool ext;
+                            if (KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) { scan = s; extended = ext; }
                         }
-                        _mirroredKeys++;
-                        foreach (RdpSession t in _targets) t.PostVirtualKey(vk, scan, extended, keyUp);
-                    }
-                    else if (_dbgBudget > 0)
-                    {
-                        // 未镜像:记录焦点细节,便于定位主控判定失败原因
-                        _dbgBudget--;
-                        IntPtr fg = NativeMethods.GetForegroundWindow();
-                        uint pid;
-                        uint fgTid = NativeMethods.GetWindowThreadProcessId(fg, out pid);
-                        IntPtr focus = NativeMethods.GetFocus();
-                        AppLogger.Info(string.Format(
-                            "钩子按键 vk=0x{0:X2} 未镜像(焦点不在主控): focus=0x{1:X} master=0x{2:X} fg=0x{3:X} 前台线程匹配={4}",
-                            vk, focus.ToInt64(), _masterRoot.ToInt64(), fg.ToInt64(),
-                            fgTid == NativeMethods.GetCurrentThreadId()));
+
+                        if (MasterHasFocus())
+                        {
+                            if (_dbgBudget > 0)
+                            {
+                                _dbgBudget--;
+                                AppLogger.Info(string.Format(
+                                    "钩子按键 vk=0x{0:X2} scan=0x{1:X2} up={2} → 入队镜像到 {3} 个目标",
+                                    vk, scan, keyUp, _targets.Count));
+                            }
+                            _mirroredKeys++;
+                            KeyEvent ev;
+                            ev.Vk = vk; ev.Scan = scan; ev.Ext = extended; ev.Up = keyUp;
+                            _pending.Enqueue(ev);
+                        }
+                        else if (_dbgBudget > 0)
+                        {
+                            // 未镜像:记录焦点细节,便于定位主控判定失败原因
+                            _dbgBudget--;
+                            IntPtr fg = NativeMethods.GetForegroundWindow();
+                            uint pid;
+                            uint fgTid = NativeMethods.GetWindowThreadProcessId(fg, out pid);
+                            IntPtr focus = NativeMethods.GetFocus();
+                            AppLogger.Info(string.Format(
+                                "钩子按键 vk=0x{0:X2} 未镜像(焦点不在主控): focus=0x{1:X} master=0x{2:X} fg=0x{3:X} 前台线程匹配={4}",
+                                vk, focus.ToInt64(), _masterRoot.ToInt64(), fg.ToInt64(),
+                                fgTid == NativeMethods.GetCurrentThreadId()));
+                        }
                     }
                 }
             }
             return NativeMethods.CallNextHookEx(_hookId, code, wParam, lParam);
+        }
+
+        /// <summary>
+        /// 批量注入队列中的按键（UI 线程 Timer 30ms 一批）。
+        /// 关键：mstscax 只处理"自己持有键盘焦点"时的输入——注入前把焦点
+        /// 临时切到目标控件，整批重放后立刻还原给原焦点（通常为主控分格）。
+        /// </summary>
+        private void DrainPendingKeys()
+        {
+            if (_pending.Count == 0 || _targets.Count == 0) return;
+
+            List<KeyEvent> batch = new List<KeyEvent>();
+            while (_pending.Count > 0 && batch.Count < 24) batch.Add(_pending.Dequeue());
+
+            IntPtr prev = NativeMethods.GetFocus();
+            RdpSession[] targets = _targets.ToArray();
+            int sent = 0;
+            foreach (RdpSession t in targets)
+            {
+                IntPtr h = t.Handle;
+                if (h == IntPtr.Zero) continue;
+                NativeMethods.SetFocus(h);
+                foreach (KeyEvent e in batch)
+                {
+                    t.PostVirtualKey(e.Vk, e.Scan, e.Ext, e.Up);
+                    sent++;
+                }
+            }
+            // 还原焦点(优先原焦点，否则主控)
+            IntPtr restore = prev != IntPtr.Zero ? prev : _masterRoot;
+            if (restore != IntPtr.Zero) NativeMethods.SetFocus(restore);
+
+            if (_dbgBudget > 0)
+            {
+                _dbgBudget--;
+                AppLogger.Info(string.Format("焦点轮转注入: {0} 个事件 × {1} 个目标 (焦点已还原)",
+                    batch.Count, targets.Length));
+            }
         }
 
         /// <summary>主控判定：本程序在前台，且主控 RDP 控件（或其内部子窗口）持有键盘焦点。</summary>

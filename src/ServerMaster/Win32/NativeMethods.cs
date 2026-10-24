@@ -125,6 +125,10 @@ namespace ServerMaster.Win32
         [DllImport("user32.dll")]
         public static extern IntPtr GetFocus();
 
+        /// <summary>同线程内设置键盘焦点（配合 GetFocus 使用）。</summary>
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetFocus(IntPtr hWnd);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         public static extern IntPtr GetModuleHandle(string lpModuleName);
 
