@@ -54,6 +54,9 @@ namespace ServerMaster.Win32
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern short VkKeyScanW(char ch);
 
+        [DllImport("user32.dll")]
+        public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT
         {

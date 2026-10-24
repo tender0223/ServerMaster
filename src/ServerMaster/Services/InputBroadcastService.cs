@@ -23,6 +23,11 @@ namespace ServerMaster.Services
         private DateTime _lastMoveCast = DateTime.MinValue;
         private IntPtr _hookId = IntPtr.Zero;
         private readonly NativeMethods.HookProc _hookProc; // 强引用防委托被 GC
+        private int _dbgBudget;      // 每次开启广播后的调试日志条数预算
+        private long _mirroredKeys;  // 已镜像按键计数(状态栏显示)
+
+        /// <summary>已镜像的按键总数（用于状态栏实时反馈）。</summary>
+        public long MirroredKeyCount { get { return _mirroredKeys; } }
 
         public InputBroadcastService()
         {
@@ -61,6 +66,8 @@ namespace ServerMaster.Services
         {
             if (Enabled) return;
             Enabled = true;
+            _dbgBudget = 60;
+            _mirroredKeys = 0;
             if (_hookId == IntPtr.Zero)
             {
                 IntPtr mod = NativeMethods.GetModuleHandle(null);
@@ -91,20 +98,41 @@ namespace ServerMaster.Services
                 {
                     NativeMethods.KBDLLHOOKSTRUCT k =
                         (NativeMethods.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(NativeMethods.KBDLLHOOKSTRUCT));
+                    bool keyUp = (k.flags & NativeMethods.LLKHF_UP) != 0;
+                    bool extended = (k.flags & NativeMethods.LLKHF_EXTENDED) != 0;
+                    int vk = (int)k.vkCode;
+                    int scan = (int)k.scanCode;
+                    if (scan == 0)
+                    {
+                        int s;
+                        bool ext;
+                        if (KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) { scan = s; extended = ext; }
+                    }
+
                     if (MasterHasFocus())
                     {
-                        bool keyUp = (k.flags & NativeMethods.LLKHF_UP) != 0;
-                        bool extended = (k.flags & NativeMethods.LLKHF_EXTENDED) != 0;
-                        int vk = (int)k.vkCode;
-                        int scan = (int)k.scanCode;
-                        if (scan == 0)
+                        if (_dbgBudget > 0)
                         {
-                            int s;
-                            bool ext;
-                            if (KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) { scan = s; extended = ext; }
-                            else return NativeMethods.CallNextHookEx(_hookId, code, wParam, lParam);
+                            _dbgBudget--;
+                            AppLogger.Info(string.Format(
+                                "钩子按键 vk=0x{0:X2} scan=0x{1:X2} up={2} → 镜像到 {3} 个目标",
+                                vk, scan, keyUp, _targets.Count));
                         }
+                        _mirroredKeys++;
                         foreach (RdpSession t in _targets) t.PostVirtualKey(vk, scan, extended, keyUp);
+                    }
+                    else if (_dbgBudget > 0)
+                    {
+                        // 未镜像:记录焦点细节,便于定位主控判定失败原因
+                        _dbgBudget--;
+                        IntPtr fg = NativeMethods.GetForegroundWindow();
+                        uint pid;
+                        uint fgTid = NativeMethods.GetWindowThreadProcessId(fg, out pid);
+                        IntPtr focus = NativeMethods.GetFocus();
+                        AppLogger.Info(string.Format(
+                            "钩子按键 vk=0x{0:X2} 未镜像(焦点不在主控): focus=0x{1:X} master=0x{2:X} fg=0x{3:X} 前台线程匹配={4}",
+                            vk, focus.ToInt64(), _masterRoot.ToInt64(), fg.ToInt64(),
+                            fgTid == NativeMethods.GetCurrentThreadId()));
                     }
                 }
             }

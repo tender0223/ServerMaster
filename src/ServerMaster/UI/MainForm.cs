@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.7\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.8\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -168,6 +168,7 @@ namespace ServerMaster.UI
             _toolbar.Items.Add(_btnBroadcast);
             _toolbar.Items.Add("全选广播", null, delegate { SetAllBroadcast(true); });
             _toolbar.Items.Add("清除广播", null, delegate { SetAllBroadcast(false); });
+            _toolbar.Items.Add("🧪注入测试", null, delegate { InjectionSelfTest(); });
             _toolbar.Items.Add(new ToolStripSeparator());
 
             _toolbar.Items.Add("📦 文件传输", null, delegate { OpenTransfer(); });
@@ -721,13 +722,88 @@ namespace ServerMaster.UI
         private void RefreshBroadcastTargets()
         {
             List<RdpSession> targets = new List<RdpSession>();
+            List<string> names = new List<string>();
             foreach (SessionTile t in _grid.Tiles)
             {
                 if (t.IsBroadcastTarget && t.Session.State == SessionState.Connected)
+                {
                     targets.Add(t.Session);
+                    names.Add(t.Session.Server.DisplayName);
+                }
             }
             _broadcast.SetTargets(targets);
+            string sig = string.Join(",", names.ToArray());
+            if (sig != _lastTargetSig)
+            {
+                _lastTargetSig = sig;
+                AppLogger.Info("广播目标(" + targets.Count + "): " + (sig.Length > 0 ? sig : "无") +
+                               " | 主控: " + (_broadcast.Master == null ? "无" : _broadcast.Master.Server.DisplayName));
+            }
             UpdateStatus();
+        }
+
+        private string _lastTargetSig = "#init#";
+
+        /// <summary>
+        /// 注入自测：向勾选的已连接目标分别发送 notepad+回车——
+        /// 第1台用 SendKeys(扫描码) 通道，第2台用 PostMessage 通道。
+        /// 哪台远端弹出记事本 = 哪条注入通道有效，直接定位问题环节。
+        /// </summary>
+        private void InjectionSelfTest()
+        {
+            List<RdpSession> targets = new List<RdpSession>();
+            foreach (SessionTile t in _grid.Tiles)
+                if (t.IsBroadcastTarget && t.Session.State == SessionState.Connected)
+                    targets.Add(t.Session);
+            if (targets.Count == 0)
+            {
+                MessageBox.Show(this,
+                    "请先：1) 连接至少一台服务器 2) 勾选其分格标题栏的「广播」复选框\n然后再点注入测试。",
+                    "注入测试", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string text = "notepad";
+            for (int i = 0; i < targets.Count; i++)
+            {
+                RdpSession s = targets[i];
+                bool useSendKeys = (i % 2 == 0); // 双通道分流: 第0台SendKeys, 第1台PostMessage
+                string channel = useSendKeys ? "SendKeys扫描码" : "PostMessage按键";
+                AppLogger.Info("注入测试: [" + s.Server.DisplayName + "] 通道=" + channel + " 发送 " + text + "+回车");
+                ShowMsg("注入测试: [" + s.Server.DisplayName + "] 用「" + channel + "」发送 notepad+回车 —— 看该服务器是否弹出记事本");
+
+                foreach (char c in text)
+                {
+                    short ks = Win32.NativeMethods.VkKeyScanW(c);
+                    int vk = ks & 0xFF;
+                    int scan = (int)Win32.NativeMethods.MapVirtualKey((uint)vk, 0);
+                    if (scan == 0)
+                    {
+                        int s2; bool ext;
+                        if (!KeyMapper.TryGetScanCode((Keys)vk, out s2, out ext)) scan = 0; else scan = s2;
+                    }
+                    TypeTestKey(s, vk, scan, useSendKeys);
+                    System.Threading.Thread.Sleep(20);
+                }
+                TypeTestKey(s, 0x0D, 0x1C, useSendKeys); // Enter
+                System.Threading.Thread.Sleep(20);
+            }
+            AppLogger.Info("注入测试完成: 共 " + targets.Count + " 台。哪台远端弹出记事本=对应通道有效");
+        }
+
+        private static void TypeTestKey(RdpSession s, int vk, int scan, bool useSendKeys)
+        {
+            if (scan == 0) return;
+            if (useSendKeys)
+            {
+                s.SendScanCode(scan, false, false);
+                s.SendScanCode(scan, false, true);
+            }
+            else
+            {
+                s.PostVirtualKey(vk, scan, false, false);
+                s.PostVirtualKey(vk, scan, false, true);
+            }
         }
 
         private void SetAllBroadcast(bool value)
@@ -933,7 +1009,10 @@ namespace ServerMaster.UI
         {
             int total = _conn.Sessions.Count;
             _lblConn.Text = "已连接 " + _conn.ConnectedCount + "/" + total;
-            _lblBcast.Text = "广播: " + (_broadcast.Enabled ? "开 (" + _broadcast.TargetCount + " 目标)" : "关");
+            if (_broadcast.Enabled)
+                _lblBcast.Text = "广播: 开 (" + _broadcast.TargetCount + " 目标·已镜像 " + _broadcast.MirroredKeyCount + " 键)";
+            else
+                _lblBcast.Text = "广播: 关";
         }
 
         private void ShowMsg(string msg)
