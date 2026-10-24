@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.4\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.5\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -885,7 +885,10 @@ namespace ServerMaster.UI
             }
             if (targets.Count == 0)
             {
-                ShowMsg("批量推送：勾选的服务器中没有已连接的会话，请先连接");
+                MessageBox.Show(this,
+                    "勾选的服务器中没有已连接的会话。\n请先在主界面连接这些服务器，再执行批量推送。",
+                    "批量推送", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowMsg("批量推送：勾选的服务器中没有已连接的会话");
                 return;
             }
 
@@ -904,6 +907,10 @@ namespace ServerMaster.UI
                 }
                 ShowMsg("批量推送：已向 " + targets.Count + " 台(" + string.Join("、", names.ToArray()) +
                         ")发送粘贴指令，文件将出现在远端桌面/当前聚焦窗口");
+                MessageBox.Show(this,
+                    "已向 " + targets.Count + " 台服务器发送粘贴指令：\n" + string.Join("\n", names.ToArray()) +
+                    "\n\n文件将粘贴到远端当前聚焦窗口（无人操作时即桌面目录）。\n若未出现，请确认远端桌面处于桌面状态、且本会话未禁用剪贴板。",
+                    "批量推送已执行", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
             timer.Start();
         }

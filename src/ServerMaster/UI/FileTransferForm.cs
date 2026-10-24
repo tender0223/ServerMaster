@@ -67,7 +67,9 @@ namespace ServerMaster.UI
             _lstServers.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom;
             _lstServers.ItemCheck += delegate(object s, ItemCheckEventArgs e)
             {
-                BeginInvoke((MethodInvoker)delegate { UpdateStartButton(); });
+                // 构造期间(句柄未创建)勾选"已连接"项会触发本事件，此时不能 BeginInvoke
+                if (IsHandleCreated) BeginInvoke((MethodInvoker)UpdateStartButton);
+                else UpdateStartButton();
             };
             Controls.Add(_lstServers);
 

@@ -165,16 +165,18 @@ namespace ServerMaster.Rdp
             return _rdp.ClientSize;
         }
 
-        /// <summary>向远端会话注入一次按键（扫描码）。扩展键使用 0xE0 前缀编码。</summary>
+        /// <summary>向远端会话注入一次按键（扫描码）。</summary>
         public void SendScanCode(int scanCode, bool extended, bool keyUp)
         {
             try
             {
                 if (_ns == null) _ns = (IMsRdpClientNonScriptable)_rdp.GetOcx();
-                int data = extended ? ((scanCode & 0xFF) | (0xE0 << 8)) : (scanCode & 0xFF);
+                // plKeyData 与 WM_KEYDOWN 的 lParam 同格式：扫描码在 16-23 位，扩展键标志在第 24 位。
+                // 直接填低 8 位是无效编码（注入的键会被丢弃）。
+                int data = (scanCode & 0xFF) << 16;
+                if (extended) data |= 1 << 24;
                 bool up = keyUp;
-                int kd = data;
-                _ns.SendKeys(1, ref up, ref kd);
+                _ns.SendKeys(1, ref up, ref data);
             }
             catch (Exception ex)
             {
