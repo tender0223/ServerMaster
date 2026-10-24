@@ -165,20 +165,41 @@ namespace ServerMaster.Services
         /// <summary>
         /// 批量注入队列中的按键（UI 线程 Timer 30ms 一批）。
         /// 注入方式：焦点切到目标控件 + keybd_event 真实键盘事件——
-        /// 真实事件走系统全部输入路径(原始输入/消息队列/按键状态)，mstscax 无论
-        /// 监听哪条路都能收到；事件带 LLKHF_INJECTED 标志，我们的钩子会跳过(无自环)。
-        /// 注入后保持焦点短暂等待事件消化，再还原给原焦点(通常为主控分格)。
+        /// 实验台已验证的有效配方(keybd_event 走系统全部输入路径，mstscax 正常接收；
+        /// 事件带 LLKHF_INJECTED 标志，我们的钩子会跳过，无自环)。
+        /// 安全闸：keybd_event 注入的是系统全局输入流，只有本程序前台时才执行，
+        /// 否则按键会打进别的程序 —— 此时丢弃队列并提示。
         /// </summary>
         private void DrainPendingKeys()
         {
             if (_draining) return;
             if (_pending.Count == 0 || _targets.Count == 0) return;
 
+            // 前台安全闸: 前台不属于本程序线程时绝不注入
+            IntPtr fg = NativeMethods.GetForegroundWindow();
+            if (fg != IntPtr.Zero)
+            {
+                uint pid;
+                uint fgTid = NativeMethods.GetWindowThreadProcessId(fg, out pid);
+                if (fgTid != NativeMethods.GetCurrentThreadId())
+                {
+                    if (_dbgBudget > 0)
+                    {
+                        _dbgBudget--;
+                        AppLogger.Info(string.Format(
+                            "按键队列丢弃 {0} 个(前台已切走 fg=0x{1:X}，防误注入其他程序)",
+                            _pending.Count, fg.ToInt64()));
+                    }
+                    _pending.Clear();
+                    return;
+                }
+            }
+
             _draining = true;
             try
             {
                 List<KeyEvent> batch = new List<KeyEvent>();
-                while (_pending.Count > 0 && batch.Count < 24) batch.Add(_pending.Dequeue());
+                while (_pending.Count > 0 && batch.Count < 12) batch.Add(_pending.Dequeue());
 
                 IntPtr prev = NativeMethods.GetFocus();
                 RdpSession[] targets = _targets.ToArray();
@@ -187,15 +208,18 @@ namespace ServerMaster.Services
                     IntPtr h = t.Handle;
                     if (h == IntPtr.Zero) continue;
                     NativeMethods.SetFocus(h);
+                    System.Threading.Thread.Sleep(30);
                     foreach (KeyEvent e in batch)
                     {
                         uint flags = e.Up ? NativeMethods.KEYEVENTF_KEYUP : 0;
                         if (e.Ext) flags |= NativeMethods.KEYEVENTF_EXTENDEDKEY;
                         NativeMethods.keybd_event((byte)e.Vk, (byte)e.Scan, flags, UIntPtr.Zero);
+                        // 远端消化需要节奏: 实验台验证 down/up 间隔 40-90ms 稳定有效
+                        System.Threading.Thread.Sleep(40);
                     }
                     // keybd_event 是异步进入系统输入队列的:保持焦点等待消化,避免键落入已还原的主控
                     Application.DoEvents();
-                    System.Threading.Thread.Sleep(30);
+                    System.Threading.Thread.Sleep(45);
                 }
                 IntPtr restore = prev != IntPtr.Zero ? prev : _masterRoot;
                 if (restore != IntPtr.Zero) NativeMethods.SetFocus(restore);

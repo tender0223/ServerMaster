@@ -225,6 +225,13 @@ namespace ServerMaster.Rdp
         private void rdp_OnConnected(object sender, EventArgs e)
         {
             SetState(SessionState.Connected, "");
+            // 组合键转发：默认 KeyboardHookMode=0(仅全屏模式转发),窗口模式下
+            // Win/Ctrl+Esc/Alt+Tab 会被本地吃掉不进远端 —— 广播场景必须设为1(全部转发远端)
+            TrySet("KeyboardHookMode", delegate
+            {
+                IMsRdpClientSecuredSettings2 ss = (IMsRdpClientSecuredSettings2)_rdp.SecuredSettings;
+                ss.KeyboardHookMode = 1;
+            });
         }
 
         private void rdp_OnLoginComplete(object sender, EventArgs e)

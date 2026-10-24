@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.3.0\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.3.1\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -745,9 +745,10 @@ namespace ServerMaster.UI
         private string _lastTargetSig = "#init#";
 
         /// <summary>
-        /// 注入自测：向勾选的已连接目标分别发送 notepad+回车——
-        /// 第1台用 SendKeys(扫描码) 通道，第2台用 PostMessage 通道。
-        /// 哪台远端弹出记事本 = 哪条注入通道有效，直接定位问题环节。
+        /// 注入自测：用实验台已验证的配方（本程序前台 + SetFocus 目标控件 +
+        /// keybd_event 扫描码注入；组合键转发依赖随连接自动设置的 KeyboardHookMode=1）
+        /// 向每台目标发送 Ctrl+Esc → notepad → 回车。
+        /// 判定肉眼可见：远端分格弹出「记事本」= 键盘注入链路正常。
         /// </summary>
         private void InjectionSelfTest()
         {
@@ -763,60 +764,88 @@ namespace ServerMaster.UI
                 return;
             }
 
-            string text = "notepad";
-            for (int i = 0; i < targets.Count; i++)
+            // 前台确认: keybd_event 注入的是系统全局输入流,本程序不在前台时按键会打进别的程序
+            IntPtr fg = Win32.NativeMethods.GetForegroundWindow();
+            uint pid;
+            uint fgTid = fg == IntPtr.Zero ? 0 : Win32.NativeMethods.GetWindowThreadProcessId(fg, out pid);
+            bool fgMine = fgTid != 0 && fgTid == Win32.NativeMethods.GetCurrentThreadId();
+            AppLogger.Info(string.Format("注入测试: 前台=0x{0:X} 本程序线程={1} 前台属于本程序={2}",
+                fg.ToInt64(), Win32.NativeMethods.GetCurrentThreadId(), fgMine));
+            if (!fgMine)
             {
-                RdpSession s = targets[i];
-                bool useRealInput = (i % 2 == 0); // 双通道分流: 第0台keybd_event真实输入, 第1台PostMessage对照
-                string channel = useRealInput ? "keybd_event真实输入" : "PostMessage按键";
-                AppLogger.Info("注入测试(真实输入): [" + s.Server.DisplayName + "] 通道=" + channel + " 发送 " + text + "+回车");
-                ShowMsg("注入测试: [" + s.Server.DisplayName + "] 焦点轮转+「" + channel + "」发送 notepad+回车 —— 看该服务器是否弹出记事本");
+                MessageBox.Show(this,
+                    "当前前台窗口不是本程序（可能被其他窗口遮挡激活）。\n请点击本程序窗口任意位置后重试，避免按键注入到其他程序。",
+                    "注入测试中止", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
+            foreach (RdpSession s in targets)
+            {
                 IntPtr h = s.Handle;
                 if (h == IntPtr.Zero) continue;
+                ShowMsg("注入测试: [" + s.Server.DisplayName + "] 发送 Ctrl+Esc → notepad → 回车，请观察该分格远端");
+                AppLogger.Info("注入测试: [" + s.Server.DisplayName + "] keybd_event 已验证配方注入 notepad 流程");
                 IntPtr prevFocus = Win32.NativeMethods.GetFocus();
                 Win32.NativeMethods.SetFocus(h);
+                System.Threading.Thread.Sleep(300);
                 try
                 {
-                    foreach (char c in text)
-                    {
-                        short ks = Win32.NativeMethods.VkKeyScanW(c);
-                        int vk = ks & 0xFF;
-                        int scan = (int)Win32.NativeMethods.MapVirtualKey((uint)vk, 0);
-                        if (scan == 0)
-                        {
-                            int s2; bool ext;
-                            if (KeyMapper.TryGetScanCode((Keys)vk, out s2, out ext)) scan = s2;
-                        }
-                        if (scan != 0) TypeTestKey(s, vk, scan, useRealInput);
-                        System.Threading.Thread.Sleep(25);
-                    }
-                    TypeTestKey(s, 0x0D, 0x1C, useRealInput); // Enter
-                    System.Threading.Thread.Sleep(40); // 等真实输入事件消化
+                    // Esc 先关掉可能开着的开始菜单,保证起点一致
+                    RealPress(0x1B, 0x01);
+                    System.Threading.Thread.Sleep(600);
+                    // Ctrl+Esc 打开远端开始菜单(KHM=1 已随连接设置,组合键才会转发远端)
+                    RealHold(0x11, 0x1D, false);
+                    RealPress(0x1B, 0x01);
+                    RealHold(0x11, 0x1D, true);
+                    System.Threading.Thread.Sleep(1200);
+                    foreach (char c in "notepad") RealTypeChar(c);
+                    System.Threading.Thread.Sleep(600);
+                    RealPress(0x0D, 0x1C); // 回车启动记事本
+                    System.Threading.Thread.Sleep(500);
                 }
                 finally
                 {
                     IntPtr restore = prevFocus != IntPtr.Zero ? prevFocus : h;
                     Win32.NativeMethods.SetFocus(restore);
                 }
+                System.Threading.Thread.Sleep(200);
             }
-            AppLogger.Info("注入测试完成: 共 " + targets.Count + " 台(keybd_event vs PostMessage)。哪台远端弹出记事本=对应通道有效");
+            AppLogger.Info("注入测试完成: " + targets.Count + " 台。远端弹出记事本=注入链路(含组合键转发)正常");
+            MessageBox.Show(this,
+                "已向 " + targets.Count + " 台目标发送: Ctrl+Esc → notepad → 回车\n\n" +
+                "判定：分格里远端弹出「记事本」= 键盘注入链路已打通，广播输入/批量粘贴即会生效。\n" +
+                "若远端开了开始菜单但没弹记事本，或完全无反应，请把日志发我继续排查。",
+                "注入测试已执行", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        private static void TypeTestKey(RdpSession s, int vk, int scan, bool useRealInput)
+        /// <summary>keybd_event 完整单击: down + 70ms + up + 90ms（实验台验证的节奏）。</summary>
+        private static void RealPress(int vk, int scan)
         {
-            if (scan == 0) return;
-            if (useRealInput)
+            Win32.NativeMethods.keybd_event((byte)vk, (byte)scan, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(70);
+            Win32.NativeMethods.keybd_event((byte)vk, (byte)scan, Win32.NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(90);
+        }
+
+        /// <summary>keybd_event 单独按下或抬起（组合键修饰键用），80ms 节奏。</summary>
+        private static void RealHold(int vk, int scan, bool up)
+        {
+            uint flags = up ? Win32.NativeMethods.KEYEVENTF_KEYUP : 0;
+            Win32.NativeMethods.keybd_event((byte)vk, (byte)scan, flags, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(80);
+        }
+
+        private static void RealTypeChar(char c)
+        {
+            short ks = Win32.NativeMethods.VkKeyScanW(c);
+            int vk = ks & 0xFF;
+            int scan = (int)Win32.NativeMethods.MapVirtualKey((uint)vk, 0);
+            if (scan == 0)
             {
-                // 真实键盘事件: 走系统全部输入路径(需调用前已 SetFocus 到目标)
-                Win32.NativeMethods.keybd_event((byte)vk, (byte)scan, 0, UIntPtr.Zero);
-                Win32.NativeMethods.keybd_event((byte)vk, (byte)scan, Win32.NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);
+                int s2; bool ext;
+                if (KeyMapper.TryGetScanCode((Keys)vk, out s2, out ext)) scan = s2;
             }
-            else
-            {
-                s.PostVirtualKey(vk, scan, false, false);
-                s.PostVirtualKey(vk, scan, false, true);
-            }
+            if (scan != 0) RealPress(vk, scan);
         }
 
         private void SetAllBroadcast(bool value)
@@ -988,21 +1017,37 @@ namespace ServerMaster.UI
             {
                 timer.Stop();
                 timer.Dispose();
-                // 带焦点轮转的 Ctrl+V 真实输入注入（mstscax 只处理持有焦点时的输入）
+                // 前台安全闸: keybd_event 注入全局输入流,本程序不在前台时中止
+                IntPtr fg = Win32.NativeMethods.GetForegroundWindow();
+                uint pid;
+                uint fgTid = fg == IntPtr.Zero ? 0 : Win32.NativeMethods.GetWindowThreadProcessId(fg, out pid);
+                bool fgMine = fgTid != 0 && fgTid == Win32.NativeMethods.GetCurrentThreadId();
+                if (!fgMine)
+                {
+                    AppLogger.Warn("批量推送中止: 前台窗口不属于本程序，Ctrl+V 可能注入其他程序");
+                    ShowMsg("批量推送中止：本程序不在前台（请保持主窗口激活后重试）");
+                    return;
+                }
+                // 焦点轮转 + keybd_event Ctrl+V（实验台验证节奏: 键间隔 60-90ms）
                 foreach (RdpSession s in targets)
                 {
                     IntPtr h = s.Handle;
                     if (h == IntPtr.Zero) continue;
                     IntPtr prevFocus = Win32.NativeMethods.GetFocus();
                     Win32.NativeMethods.SetFocus(h);
+                    System.Threading.Thread.Sleep(250); // 等控件完成内部焦点切换
                     Win32.NativeMethods.keybd_event(0x11, 0x1D, 0, UIntPtr.Zero);          // Ctrl 按下
+                    System.Threading.Thread.Sleep(70);
                     Win32.NativeMethods.keybd_event(0x56, 0x2F, 0, UIntPtr.Zero);          // V 按下
+                    System.Threading.Thread.Sleep(80);
                     Win32.NativeMethods.keybd_event(0x56, 0x2F, Win32.NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);   // V 抬起
+                    System.Threading.Thread.Sleep(70);
                     Win32.NativeMethods.keybd_event(0x11, 0x1D, Win32.NativeMethods.KEYEVENTF_KEYUP, UIntPtr.Zero);   // Ctrl 抬起
-                    System.Threading.Thread.Sleep(40); // 等真实输入消化
+                    System.Threading.Thread.Sleep(150); // 等真实输入消化再切下一台
                     IntPtr restore = prevFocus != IntPtr.Zero ? prevFocus : h;
                     Win32.NativeMethods.SetFocus(restore);
                 }
+                AppLogger.Info("批量推送: 已向 " + targets.Count + " 台注入 Ctrl+V");
                 ShowMsg("批量推送：已向 " + targets.Count + " 台(" + string.Join("、", names.ToArray()) +
                         ")发送粘贴指令，文件将出现在远端桌面/当前聚焦窗口");
                 MessageBox.Show(this,
