@@ -20,6 +20,8 @@ namespace ServerMaster.UI
     {
         private readonly AppConfig _cfg;
         private readonly HashSet<string> _connectedIds;
+        /// <summary>经 RDP 剪贴板向勾选的已连接服务器广播 Ctrl+V（由主窗体提供）。</summary>
+        private readonly Action<List<ServerInfo>> _broadcastPaste;
         private CheckedListBox _lstServers;
         private TextBox _txtRemoteDir;
         private ListBox _lstFiles;
@@ -34,10 +36,12 @@ namespace ServerMaster.UI
         private Thread _worker;
         private volatile bool _cancel;
 
-        public FileTransferForm(AppConfig cfg, HashSet<string> connectedIds)
+        public FileTransferForm(AppConfig cfg, HashSet<string> connectedIds,
+                                Action<List<ServerInfo>> broadcastPaste)
         {
             _cfg = cfg;
             _connectedIds = connectedIds ?? new HashSet<string>();
+            _broadcastPaste = broadcastPaste;
 
             Text = "批量文件传输";
             StartPosition = FormStartPosition.CenterParent;
@@ -102,28 +106,36 @@ namespace ServerMaster.UI
 
             Button btnAddFiles = new Button();
             btnAddFiles.Text = "添加文件";
-            btnAddFiles.SetBounds(300, 54, 110, 26);
+            btnAddFiles.SetBounds(300, 54, 110, 24);
             btnAddFiles.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnAddFiles.Click += btnAddFiles_Click;
             gUpload.Controls.Add(btnAddFiles);
 
             Button btnAddDir = new Button();
             btnAddDir.Text = "添加文件夹";
-            btnAddDir.SetBounds(300, 84, 110, 26);
+            btnAddDir.SetBounds(300, 82, 110, 24);
             btnAddDir.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnAddDir.Click += btnAddDir_Click;
             gUpload.Controls.Add(btnAddDir);
 
             Button btnClear = new Button();
             btnClear.Text = "清空列表";
-            btnClear.SetBounds(300, 114, 110, 26);
+            btnClear.SetBounds(300, 110, 110, 24);
             btnClear.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnClear.Click += delegate { _files.Clear(); _baseDir = ""; _lstFiles.Items.Clear(); };
             gUpload.Controls.Add(btnClear);
 
+            // 经 RDP 剪贴板批量推送：不依赖 445 端口，NAT VPS 也能用
+            Button btnBroadcastPaste = new Button();
+            btnBroadcastPaste.Text = "批量推送(经RDP)";
+            btnBroadcastPaste.SetBounds(300, 138, 110, 24);
+            btnBroadcastPaste.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            btnBroadcastPaste.Click += btnBroadcastPaste_Click;
+            gUpload.Controls.Add(btnBroadcastPaste);
+
             Button btnClip = new Button();
             btnClip.Text = "推送到剪贴板";
-            btnClip.SetBounds(300, 150, 110, 26);
+            btnClip.SetBounds(300, 166, 110, 24);
             btnClip.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             btnClip.Click += btnClip_Click;
             gUpload.Controls.Add(btnClip);
@@ -342,6 +354,41 @@ namespace ServerMaster.UI
             ClipboardChannel.PushFiles(_files.ToArray());
             Status("已推送到剪贴板 —— 切换到远程会话 Ctrl+V 粘贴");
             Log("剪贴板推送 " + _files.Count + " 个文件");
+        }
+
+        /// <summary>
+        /// 批量推送(经RDP)：文件入剪贴板 → 主窗体向勾选的已连接会话广播 Ctrl+V。
+        /// 不依赖 445 端口，NAT VPS / SMB 被封的环境也能用。
+        /// 文件将出现在每台服务器当前会话的聚焦窗口（无人操作时即桌面=桌面目录）。
+        /// </summary>
+        private void btnBroadcastPaste_Click(object sender, EventArgs e)
+        {
+            if (_files.Count == 0)
+            {
+                MessageBox.Show(this, "请先添加文件。", "提示");
+                return;
+            }
+            if (_broadcastPaste == null)
+            {
+                MessageBox.Show(this, "当前无法使用批量推送。", "提示");
+                return;
+            }
+            List<ServerInfo> targets = GetSelectedServers();
+            if (targets.Count == 0)
+            {
+                MessageBox.Show(this, "请先勾选目标服务器（已连接的会自动勾选）。", "提示");
+                return;
+            }
+            if (_worker != null && _worker.IsAlive)
+            {
+                MessageBox.Show(this, "SMB 传输进行中，请等待或取消后再推送。", "提示");
+                return;
+            }
+
+            ClipboardChannel.PushFiles(_files.ToArray());
+            Log("批量推送：已把 " + _files.Count + " 个文件放入剪贴板，1.5 秒后向勾选的已连接服务器广播 Ctrl+V…");
+            Status("批量推送中（文件将出现在远端桌面/当前聚焦窗口）…");
+            _broadcastPaste(targets);
         }
 
         #region 上传

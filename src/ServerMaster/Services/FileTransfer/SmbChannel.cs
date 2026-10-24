@@ -112,6 +112,7 @@ namespace ServerMaster.Services.FileTransfer
             {
                 case 5: return "拒绝访问(5)：请检查账号密码与本地安全策略";
                 case 53: return "找不到网络路径(53)：网络不通或 445 端口未开放/管理共享被禁用";
+                case 64: return "指定的网络名不再可用(64)：445 端口连接被重置——NAT VPS/云防火墙通常不转发 SMB 端口，请改用「批量推送(经RDP)」";
                 case 86: case 1326: return "凭据错误(账号或密码不正确)";
                 case 1219: return "凭据冲突(1219)：该主机已存在其他 Windows 凭据会话";
                 case 1203: return "无法连接网络驱动器(1203)";

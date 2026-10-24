@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.3\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.4\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -861,8 +861,51 @@ namespace ServerMaster.UI
             HashSet<string> connected = new HashSet<string>();
             foreach (RdpSession s in _conn.Sessions)
                 if (s.State == SessionState.Connected) connected.Add(s.Server.Id);
-            FileTransferForm f = new FileTransferForm(_cfg, connected);
+            FileTransferForm f = new FileTransferForm(_cfg, connected, BroadcastPasteToServers);
             f.Show(this);
+        }
+
+        /// <summary>
+        /// 批量推送(经RDP)：调用方已把文件放入剪贴板，等待 RDP 剪贴板同步后
+        /// 向勾选的已连接会话注入 Ctrl+V，文件粘贴到远端聚焦窗口（无人操作时为桌面）。
+        /// 不依赖 SMB/445，NAT VPS 可用。
+        /// </summary>
+        private void BroadcastPasteToServers(List<ServerInfo> servers)
+        {
+            List<RdpSession> targets = new List<RdpSession>();
+            List<string> names = new List<string>();
+            foreach (ServerInfo s in servers)
+            {
+                RdpSession session = _conn.FindByServer(s);
+                if (session != null && session.State == SessionState.Connected)
+                {
+                    targets.Add(session);
+                    names.Add(s.DisplayName);
+                }
+            }
+            if (targets.Count == 0)
+            {
+                ShowMsg("批量推送：勾选的服务器中没有已连接的会话，请先连接");
+                return;
+            }
+
+            Timer timer = new Timer();
+            timer.Interval = 1500;
+            timer.Tick += delegate
+            {
+                timer.Stop();
+                timer.Dispose();
+                foreach (RdpSession s in targets)
+                {
+                    s.SendScanCode(0x1D, false, false); // Ctrl 按下
+                    s.SendScanCode(0x2F, false, false); // V 按下
+                    s.SendScanCode(0x2F, false, true);  // V 抬起
+                    s.SendScanCode(0x1D, false, true);  // Ctrl 抬起
+                }
+                ShowMsg("批量推送：已向 " + targets.Count + " 台(" + string.Join("、", names.ToArray()) +
+                        ")发送粘贴指令，文件将出现在远端桌面/当前聚焦窗口");
+            };
+            timer.Start();
         }
 
         private void OpenDir(string dir)
