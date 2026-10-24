@@ -39,6 +39,10 @@ namespace ServerMaster.UI
         public event Action DeleteAllRequested;
         /// <summary>删除勾选的服务器（组节点勾选会联动组内全部服务器）。</summary>
         public event Action<List<ServerInfo>> DeleteCheckedRequested;
+        /// <summary>拖拽服务器到另一个分组（参数：服务器, 目标分组名）。</summary>
+        public event Action<ServerInfo, string> MoveServerRequested;
+        /// <summary>重命名分组（参数：旧名, 新名）。</summary>
+        public event Action<string, string> RenameGroupRequested;
 
         public ServerListPanel()
         {
@@ -100,6 +104,7 @@ namespace ServerMaster.UI
                 string g = SelectedGroup();
                 if (g != null && ConnectGroupRequested != null) ConnectGroupRequested(g);
             });
+            _groupMenu.Items.Add("重命名分组…", null, delegate { OnRenameGroup(); });
             _groupMenu.Items.Add(new ToolStripSeparator());
             _groupMenu.Items.Add("删除该组服务器…", null, delegate
             {
@@ -115,11 +120,111 @@ namespace ServerMaster.UI
                     _tree.ContextMenuStrip = e.Node.Tag is ServerInfo ? _serverMenu : _groupMenu;
             };
 
+            // 拖拽服务器节点到其他分组
+            _tree.AllowDrop = true;
+            _tree.ItemDrag += delegate(object s, ItemDragEventArgs e)
+            {
+                TreeNode n = e.Item as TreeNode;
+                if (n != null && n.Tag is ServerInfo)
+                    _tree.DoDragDrop(n, DragDropEffects.Move);
+            };
+            _tree.DragEnter += delegate(object s, DragEventArgs e)
+            {
+                if (e.Data.GetDataPresent(typeof(TreeNode))) e.Effect = DragDropEffects.Move;
+            };
+            _tree.DragOver += delegate(object s, DragEventArgs e)
+            {
+                Point pt = _tree.PointToClient(new Point(e.X, e.Y));
+                string targetGroup = TargetGroupOf(_tree.GetNodeAt(pt));
+                TreeNode dragged = e.Data.GetData(typeof(TreeNode)) as TreeNode;
+                ServerInfo sv = dragged == null ? null : dragged.Tag as ServerInfo;
+                if (sv != null && targetGroup != null && targetGroup != sv.Group)
+                {
+                    e.Effect = DragDropEffects.Move;
+                    _tree.SelectedNode = _tree.GetNodeAt(pt); // 视觉反馈
+                }
+                else
+                {
+                    e.Effect = DragDropEffects.None;
+                }
+            };
+            _tree.DragDrop += delegate(object s, DragEventArgs e)
+            {
+                Point pt = _tree.PointToClient(new Point(e.X, e.Y));
+                string targetGroup = TargetGroupOf(_tree.GetNodeAt(pt));
+                TreeNode dragged = e.Data.GetData(typeof(TreeNode)) as TreeNode;
+                ServerInfo sv = dragged == null ? null : dragged.Tag as ServerInfo;
+                if (sv != null && targetGroup != null && targetGroup != sv.Group && MoveServerRequested != null)
+                    MoveServerRequested(sv, targetGroup);
+            };
+
             Controls.Add(_tree);
 
             // 树在按钮下方自适应
             _tree.SetBounds(0, 92, Width, Math.Max(60, Height - 92));
             Resize += delegate { _tree.SetBounds(0, 92, Width, Math.Max(60, Height - 92)); _txtSearch.Width = Math.Max(60, Width - 60); };
+        }
+
+        /// <summary>拖拽落点对应的分组名（服务器节点=其所属组，分组节点=组名）。</summary>
+        private string TargetGroupOf(TreeNode node)
+        {
+            while (node != null)
+            {
+                if (node.Tag is ServerInfo) return ((ServerInfo)node.Tag).Group;
+                string g = node.Tag as string;
+                if (g != null) return g;
+                node = node.Parent;
+            }
+            return null;
+        }
+
+        /// <summary>重命名分组：弹输入框确认新名。</summary>
+        private void OnRenameGroup()
+        {
+            string g = SelectedGroup();
+            if (g == null || RenameGroupRequested == null) return;
+
+            using (Form dlg = new Form())
+            {
+                dlg.Text = "重命名分组";
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.ClientSize = new Size(340, 112);
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+
+                Label l = new Label();
+                l.Text = "新的分组名:";
+                l.SetBounds(12, 12, 200, 20);
+                dlg.Controls.Add(l);
+
+                TextBox t = new TextBox();
+                t.SetBounds(12, 36, 316, 24);
+                t.Text = g;
+                dlg.Controls.Add(t);
+
+                Button ok = new Button();
+                ok.Text = "确定";
+                ok.SetBounds(158, 74, 78, 26);
+                ok.DialogResult = DialogResult.OK;
+                dlg.Controls.Add(ok);
+
+                Button ca = new Button();
+                ca.Text = "取消";
+                ca.SetBounds(244, 74, 78, 26);
+                ca.DialogResult = DialogResult.Cancel;
+                dlg.Controls.Add(ca);
+                dlg.AcceptButton = ok;
+                dlg.CancelButton = ca;
+
+                Form owner = FindForm();
+                if (dlg.ShowDialog(owner) == DialogResult.OK)
+                {
+                    string newName = t.Text.Trim();
+                    if (newName.Length > 0 && newName != g && RenameGroupRequested != null)
+                        RenameGroupRequested(g, newName);
+                }
+            }
         }
 
         private Button MakeButton(string text, EventHandler onClick)

@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.1\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.2\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -191,6 +191,8 @@ namespace ServerMaster.UI
             _listPanel.DeleteGroupRequested += delegate(string g) { DeleteGroupServers(g); };
             _listPanel.DeleteAllRequested += delegate { DeleteAllServers(); };
             _listPanel.DeleteCheckedRequested += delegate(List<ServerInfo> targets) { DeleteCheckedServers(targets); };
+            _listPanel.MoveServerRequested += delegate(ServerInfo s, string g) { MoveServerToGroup(s, g); };
+            _listPanel.RenameGroupRequested += delegate(string oldName, string newName) { RenameGroup(oldName, newName); };
             split.Panel1.Controls.Add(_listPanel);
 
             _grid = new SessionGridPanel();
@@ -301,6 +303,49 @@ namespace ServerMaster.UI
             _conn.Sessions.CopyTo(sessions, 0);
             foreach (RdpSession s in sessions) CloseSession(s);
             UpdateStatus();
+        }
+
+        /// <summary>拖拽：把服务器移动到另一个分组。</summary>
+        private void MoveServerToGroup(ServerInfo server, string newGroup)
+        {
+            if (server.Group == newGroup) return;
+            string oldGroup = server.Group;
+            server.Group = newGroup;
+            if (!_cfg.Groups.Contains(newGroup)) _cfg.Groups.Add(newGroup);
+            bool oldUsed = false;
+            foreach (ServerInfo s in _cfg.Servers)
+                if (s.Group == oldGroup) { oldUsed = true; break; }
+            if (!oldUsed) _cfg.Groups.Remove(oldGroup);
+
+            ConfigStore.Save(_cfg);
+            _listPanel.Rebind(_cfg);
+            ShowMsg("[" + server.DisplayName + "] 已移动到分组 [" + newGroup + "]");
+        }
+
+        /// <summary>重命名分组（新名已存在时合并两组）。</summary>
+        private void RenameGroup(string oldName, string newName)
+        {
+            if (string.IsNullOrEmpty(newName) || newName == oldName) return;
+            if (_cfg.Groups.Contains(newName))
+            {
+                DialogResult r = MessageBox.Show(this,
+                    "分组 [" + newName + "] 已存在，将把 [" + oldName + "] 下的服务器并入其中。继续？",
+                    "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (r != DialogResult.Yes) return;
+                _cfg.Groups.Remove(oldName);
+            }
+            else
+            {
+                int idx = _cfg.Groups.IndexOf(oldName);
+                if (idx >= 0) _cfg.Groups[idx] = newName;
+                else _cfg.Groups.Add(newName);
+            }
+            foreach (ServerInfo s in _cfg.Servers)
+                if (s.Group == oldName) s.Group = newName;
+
+            ConfigStore.Save(_cfg);
+            _listPanel.Rebind(_cfg);
+            ShowMsg("分组已重命名: [" + oldName + "] → [" + newName + "]");
         }
 
         /// <summary>连接某分组下的全部服务器。</summary>
