@@ -82,6 +82,49 @@ namespace ServerMaster.Win32
         [DllImport("mpr.dll", CharSet = CharSet.Unicode)]
         public static extern int WNetCancelConnection2W(string lpName, int dwFlags, bool fForce);
 
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        // ---- 低级键盘钩子（广播捕获用）----
+        public const int WH_KEYBOARD_LL = 13;
+        public const uint LLKHF_EXTENDED = 0x01;
+        public const uint LLKHF_INJECTED = 0x10;
+        public const uint LLKHF_UP = 0x80;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct KBDLLHOOKSTRUCT
+        {
+            public uint vkCode;
+            public uint scanCode;
+            public uint flags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        public delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr SetWindowsHookEx(int idHook, HookProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+        /// <summary>调用线程内的键盘焦点窗口（仅当前台窗口属于本线程时有效）。</summary>
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetFocus();
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr GetModuleHandle(string lpModuleName);
+
         // ---- lParam 工具 ----
         public static IntPtr MAKELPARAM(int low, int high)
         {

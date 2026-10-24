@@ -170,7 +170,33 @@ namespace ServerMaster.Rdp
             return _rdp.ClientSize;
         }
 
-        /// <summary>向远端会话注入一次按键（扫描码）。</summary>
+        /// <summary>
+        /// 向远端会话注入一次按键：PostMessage 投递完整 WM_KEYDOWN/UP（与真实键入同一处理路径）。
+        /// lParam 格式：bit0-15 重复数=1，bit16-23 扫描码，bit24 扩展键，bit30/31 已按下/释放。
+        /// </summary>
+        public void PostVirtualKey(int vk, int scanCode, bool extended, bool keyUp)
+        {
+            IntPtr hwnd = Handle;
+            if (hwnd == IntPtr.Zero) return;
+            try
+            {
+                // Alt/F10 走 WM_SYSKEY*，其余走 WM_KEY*
+                bool sys = vk == 0x12 || (vk >= 0xA4 && vk <= 0xA5) || vk == 0x79;
+                int msg = keyUp
+                    ? (sys ? Win32.NativeMethods.WM_SYSKEYUP : Win32.NativeMethods.WM_KEYUP)
+                    : (sys ? Win32.NativeMethods.WM_SYSKEYDOWN : Win32.NativeMethods.WM_KEYDOWN);
+                long lp = 1 | ((scanCode & 0xFF) << 16);
+                if (extended) lp |= 1L << 24;
+                if (keyUp) lp |= (1L << 30) | (1L << 31);
+                Win32.NativeMethods.PostMessage(hwnd, msg, (IntPtr)vk, (IntPtr)lp);
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("PostVirtualKey 失败(" + Server.DisplayName + "): " + ex.Message);
+            }
+        }
+
+        /// <summary>向远端会话注入一次按键（扫描码，SendKeys 接口）。</summary>
         public void SendScanCode(int scanCode, bool extended, bool keyUp)
         {
             try

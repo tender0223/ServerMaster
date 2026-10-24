@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using ServerMaster.Models;
 using ServerMaster.Rdp;
@@ -9,20 +10,27 @@ using ServerMaster.Win32;
 namespace ServerMaster.Services
 {
     /// <summary>
-    /// 输入广播服务（IMessageFilter，只旁听、永不拦截）：
-    /// 识别发往"主控会话"的键盘/鼠标 Windows 消息，镜像到所有"广播目标"会话。
-    ///   键盘：提取扫描码 → 目标会话 RDP 官方 SendKeys 注入；
-    ///   鼠标：坐标按目标分格尺寸线性换算 → PostMessage 注入。
-    /// 主控会话本身始终正常响应（广播是叠加，不是抢占）。
+    /// 输入广播服务（同步器）。两条独立链路，全部"旁听、不拦截"：
+    ///   键盘：WH_KEYBOARD_LL 低级钩子（系统级捕获，任何控件都吞不掉按键），
+    ///         仅当主控 RDP 控件持有键盘焦点时，把 vk+扫描码镜像到目标会话；
+    ///   鼠标：IMessageFilter 旁听主控控件窗口树的消息，坐标线性换算后 PostMessage。
+    /// 注入统一用 PostMessage 投递完整 WM_KEYDOWN/WM_xBUTTONDOWN（与真实输入同一处理路径）。
     /// </summary>
     public class InputBroadcastService : IMessageFilter
     {
         private readonly List<RdpSession> _targets = new List<RdpSession>();
         private IntPtr _masterRoot = IntPtr.Zero;
         private DateTime _lastMoveCast = DateTime.MinValue;
+        private IntPtr _hookId = IntPtr.Zero;
+        private readonly NativeMethods.HookProc _hookProc; // 强引用防委托被 GC
+
+        public InputBroadcastService()
+        {
+            _hookProc = new NativeMethods.HookProc(KeyboardHookProc);
+        }
 
         /// <summary>广播总开关（工具栏切换）。</summary>
-        public bool Enabled { get; set; }
+        public bool Enabled { get; private set; }
 
         /// <summary>主控会话（最近点击/聚焦的分格）。</summary>
         public RdpSession Master { get; private set; }
@@ -46,24 +54,92 @@ namespace ServerMaster.Services
 
         public int TargetCount { get { return _targets.Count; } }
 
+        #region 键盘：低级钩子捕获 + PostMessage 注入
+
+        /// <summary>开启广播：安装 WH_KEYBOARD_LL 钩子（回调在本 UI 线程消息循环派发）。</summary>
+        public void Enable()
+        {
+            if (Enabled) return;
+            Enabled = true;
+            if (_hookId == IntPtr.Zero)
+            {
+                IntPtr mod = NativeMethods.GetModuleHandle(null);
+                _hookId = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL,
+                    _hookProc, mod, 0);
+                AppLogger.Info("键盘广播钩子安装: " + (_hookId != IntPtr.Zero ? "OK" : "失败 err=" + Marshal.GetLastWin32Error()));
+            }
+        }
+
+        public void Disable()
+        {
+            Enabled = false;
+            if (_hookId != IntPtr.Zero)
+            {
+                NativeMethods.UnhookWindowsHookEx(_hookId);
+                _hookId = IntPtr.Zero;
+                AppLogger.Info("键盘广播钩子卸载");
+            }
+        }
+
+        private IntPtr KeyboardHookProc(int code, IntPtr wParam, IntPtr lParam)
+        {
+            if (code >= 0 && Enabled && _targets.Count > 0 && _masterRoot != IntPtr.Zero)
+            {
+                int msg = wParam.ToInt32();
+                if (msg == NativeMethods.WM_KEYDOWN || msg == NativeMethods.WM_KEYUP ||
+                    msg == NativeMethods.WM_SYSKEYDOWN || msg == NativeMethods.WM_SYSKEYUP)
+                {
+                    NativeMethods.KBDLLHOOKSTRUCT k =
+                        (NativeMethods.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(NativeMethods.KBDLLHOOKSTRUCT));
+                    if (MasterHasFocus())
+                    {
+                        bool keyUp = (k.flags & NativeMethods.LLKHF_UP) != 0;
+                        bool extended = (k.flags & NativeMethods.LLKHF_EXTENDED) != 0;
+                        int vk = (int)k.vkCode;
+                        int scan = (int)k.scanCode;
+                        if (scan == 0)
+                        {
+                            int s;
+                            bool ext;
+                            if (KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) { scan = s; extended = ext; }
+                            else return NativeMethods.CallNextHookEx(_hookId, code, wParam, lParam);
+                        }
+                        foreach (RdpSession t in _targets) t.PostVirtualKey(vk, scan, extended, keyUp);
+                    }
+                }
+            }
+            return NativeMethods.CallNextHookEx(_hookId, code, wParam, lParam);
+        }
+
+        /// <summary>主控判定：本程序在前台，且主控 RDP 控件（或其内部子窗口）持有键盘焦点。</summary>
+        private bool MasterHasFocus()
+        {
+            IntPtr fg = NativeMethods.GetForegroundWindow();
+            if (fg == IntPtr.Zero) return false;
+            uint pid;
+            uint tid = NativeMethods.GetWindowThreadProcessId(fg, out pid);
+            if (tid != NativeMethods.GetCurrentThreadId()) return false;
+            IntPtr focus = NativeMethods.GetFocus();
+            if (focus == IntPtr.Zero) return false;
+            return BelongsToMaster(focus);
+        }
+
+        #endregion
+
+        #region 鼠标：消息过滤器旁听 + PostMessage 注入
+
         public bool PreFilterMessage(ref Message m)
         {
             if (!Enabled || _masterRoot == IntPtr.Zero || _targets.Count == 0) return false;
 
             int msg = m.Msg;
-            bool isKey = msg == NativeMethods.WM_KEYDOWN || msg == NativeMethods.WM_KEYUP
-                      || msg == NativeMethods.WM_SYSKEYDOWN || msg == NativeMethods.WM_SYSKEYUP;
             bool isMouse = (msg >= NativeMethods.WM_MOUSEMOVE && msg <= NativeMethods.WM_XBUTTONUP);
-            if (!isKey && !isMouse) return false;
+            if (!isMouse) return false;
 
-            // 消息目标必须属于主控 RDP 控件窗口树（控件本体或其内部子窗口）。
-            // 注意不能用 GA_ROOT：那会走到顶层窗体，主控控件是中间子窗口，永远匹配不上。
             if (m.HWnd == IntPtr.Zero) return false;
             if (!BelongsToMaster(m.HWnd)) return false;
 
-            if (isKey) CastKey(m);
-            else CastMouse(m);
-
+            CastMouse(m);
             return false; // 永不拦截：主控会话照常接收输入
         }
 
@@ -77,27 +153,6 @@ namespace ServerMaster.Services
                 p = NativeMethods.GetParent(p);
             }
             return false;
-        }
-
-        private void CastKey(Message m)
-        {
-            int vk = m.WParam.ToInt32() & 0xFF;
-            long lp = m.LParam.ToInt64();
-            int scan = (int)((lp >> 16) & 0xFF);
-            bool extended = (lp & (1L << 24)) != 0;
-            bool keyUp = (m.Msg == NativeMethods.WM_KEYUP || m.Msg == NativeMethods.WM_SYSKEYUP);
-
-            if (scan == 0)
-            {
-                // 部分注入按键无扫描码，用虚拟键兜底映射
-                int s;
-                bool ext;
-                if (!KeyMapper.TryGetScanCode((Keys)vk, out s, out ext)) return;
-                scan = s;
-                extended = ext;
-            }
-
-            foreach (RdpSession t in _targets) t.SendScanCode(scan, extended, keyUp);
         }
 
         private void CastMouse(Message m)
@@ -152,5 +207,7 @@ namespace ServerMaster.Services
                 NativeMethods.PostMessage(hwnd, msg, m.WParam, NativeMethods.MAKELPARAM(tx, ty));
             }
         }
+
+        #endregion
     }
 }

@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.6\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.7\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -157,7 +157,8 @@ namespace ServerMaster.UI
             _btnBroadcast.CheckOnClick = true;
             _btnBroadcast.Click += delegate
             {
-                _broadcast.Enabled = _btnBroadcast.Checked;
+                if (_btnBroadcast.Checked) _broadcast.Enable();
+                else _broadcast.Disable();
                 _btnBroadcast.Text = _btnBroadcast.Checked ? "🔴 广播输入: 开" : "🔴 广播输入: 关";
                 RefreshBroadcastTargets();
                 AppLogger.Info("广播输入 " + (_btnBroadcast.Checked ? "开启" : "关闭"));
@@ -900,10 +901,10 @@ namespace ServerMaster.UI
                 timer.Dispose();
                 foreach (RdpSession s in targets)
                 {
-                    s.SendScanCode(0x1D, false, false); // Ctrl 按下
-                    s.SendScanCode(0x2F, false, false); // V 按下
-                    s.SendScanCode(0x2F, false, true);  // V 抬起
-                    s.SendScanCode(0x1D, false, true);  // Ctrl 抬起
+                    s.PostVirtualKey(0x11, 0x1D, false, false); // Ctrl 按下
+                    s.PostVirtualKey(0x56, 0x2F, false, false); // V 按下
+                    s.PostVirtualKey(0x56, 0x2F, false, true);  // V 抬起
+                    s.PostVirtualKey(0x11, 0x1D, false, true);  // Ctrl 抬起
                 }
                 ShowMsg("批量推送：已向 " + targets.Count + " 台(" + string.Join("、", names.ToArray()) +
                         ")发送粘贴指令，文件将出现在远端桌面/当前聚焦窗口");
@@ -960,6 +961,7 @@ namespace ServerMaster.UI
             try { ConfigStore.Save(_cfg); } catch { }
 
             Application.RemoveMessageFilter(_broadcast);
+            _broadcast.Disable();
             _conn.CloseAll();
         }
 
