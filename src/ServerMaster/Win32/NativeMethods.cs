@@ -43,6 +43,9 @@ namespace ServerMaster.Win32
         public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
 
         [DllImport("user32.dll")]
+        public static extern IntPtr GetParent(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
         public static extern int MapWindowPoints(IntPtr hWndFrom, IntPtr hWndTo, ref POINT lpPoint, uint cPoints);
 
         [DllImport("user32.dll")]

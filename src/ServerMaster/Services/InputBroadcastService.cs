@@ -56,15 +56,27 @@ namespace ServerMaster.Services
             bool isMouse = (msg >= NativeMethods.WM_MOUSEMOVE && msg <= NativeMethods.WM_XBUTTONUP);
             if (!isKey && !isMouse) return false;
 
-            // 消息目标必须属于主控 RDP 控件窗口树
-            //（mstscax 内部还有子窗口，用"根窗口 == 主控控件句柄"判定）
+            // 消息目标必须属于主控 RDP 控件窗口树（控件本体或其内部子窗口）。
+            // 注意不能用 GA_ROOT：那会走到顶层窗体，主控控件是中间子窗口，永远匹配不上。
             if (m.HWnd == IntPtr.Zero) return false;
-            if (NativeMethods.GetAncestor(m.HWnd, NativeMethods.GA_ROOT) != _masterRoot) return false;
+            if (!BelongsToMaster(m.HWnd)) return false;
 
             if (isKey) CastKey(m);
             else CastMouse(m);
 
             return false; // 永不拦截：主控会话照常接收输入
+        }
+
+        /// <summary>窗口是否属于主控控件（自身或其子孙窗口）。</summary>
+        private bool BelongsToMaster(IntPtr hwnd)
+        {
+            IntPtr p = hwnd;
+            while (p != IntPtr.Zero)
+            {
+                if (p == _masterRoot) return true;
+                p = NativeMethods.GetParent(p);
+            }
+            return false;
         }
 
         private void CastKey(Message m)

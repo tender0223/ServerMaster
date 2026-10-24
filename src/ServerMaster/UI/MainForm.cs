@@ -106,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2.5\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.6\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +

@@ -130,6 +130,11 @@ namespace ServerMaster.Rdp
                 TrySet("EnableCredSspSupport", delegate { a7.EnableCredSspSupport = true; });
                 TrySet("RelativeMouseMode", delegate { a7.RelativeMouseMode = false; });
                 TrySet("RedirectClipboard", delegate { a7.RedirectClipboard = true; });
+                TrySet("WarnAboutClipboardRedirection", delegate
+                {
+                    IMsRdpClientNonScriptable5 ns5 = (IMsRdpClientNonScriptable5)_rdp.GetOcx();
+                    ns5.WarnAboutClipboardRedirection = false;
+                });
 
                 AppLogger.Info(string.Format("连接 {0} ({1}:{2})", Server.DisplayName, effectiveHost, effectivePort));
                 _rdp.Connect();
@@ -171,12 +176,17 @@ namespace ServerMaster.Rdp
             try
             {
                 if (_ns == null) _ns = (IMsRdpClientNonScriptable)_rdp.GetOcx();
-                // plKeyData 与 WM_KEYDOWN 的 lParam 同格式：扫描码在 16-23 位，扩展键标志在第 24 位。
-                // 直接填低 8 位是无效编码（注入的键会被丢弃）。
-                int data = (scanCode & 0xFF) << 16;
-                if (extended) data |= 1 << 24;
                 bool up = keyUp;
+                int scan = scanCode & 0xFF;
+
+                // 文档格式：低字节=扫描码，扩展键高字节=0xE0 前缀 (0xE0nn)
+                int data = extended ? (scan | 0xE000) : scan;
                 _ns.SendKeys(1, ref up, ref data);
+
+                // 兼容格式：若控件按 WM_KEYDOWN lParam 解释(扫描码在16-23位)，补发一次。
+                // 两种编码的低字节/16-23位必有一个为 0，被忽略的那个不会产生按键，无重复风险。
+                int data2 = scan << 16 | (extended ? (1 << 24) : 0);
+                _ns.SendKeys(1, ref up, ref data2);
             }
             catch (Exception ex)
             {
