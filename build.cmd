@@ -5,6 +5,9 @@ rem  Uses the .NET Framework compiler bundled with Windows.
 rem  Output: build\ServerMaster.exe (+ dependency DLLs)
 rem  NOTE: keep this file ASCII-only. cmd.exe parses batch files
 rem        in the OEM/ANSI codepage, non-ASCII text corrupts it.
+rem  Hot-swap: if ServerMaster.exe is locked by a running
+rem        instance, the new build is kept as ServerMaster.new.exe
+rem        and swapped in on the next run after the app closes.
 rem ============================================================
 setlocal
 cd /d "%~dp0"
@@ -36,13 +39,14 @@ copy /y lib\AxMSTSCLib.dll build\ >nul
 copy /y lib\MSTSCLib.dll     build\ >nul
 del "%RSP%" 2>nul
 
-rem 旧实例正在运行时无法覆盖 exe：新版本保留为 ServerMaster.new.exe，关闭程序后重新运行本脚本即可自动换名
+rem If the old exe is locked by a running instance, keep the new
+rem build as ServerMaster.new.exe; the next run swaps it in.
 del build\ServerMaster.exe 2>nul
 if exist build\ServerMaster.exe (
     echo [WARN] ServerMaster.exe is running - new build kept as build\ServerMaster.new.exe
     echo        Close the app, then run build.cmd again to swap it in.
 ) else (
-    ren build\ServerMaster.new.exe ServerMaster.exe
+    if exist build\ServerMaster.new.exe ren build\ServerMaster.new.exe ServerMaster.exe
 )
 
 echo [OK] build\ServerMaster.exe  - runs on Win10/Server2019+ with zero installs.
