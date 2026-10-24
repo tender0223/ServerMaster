@@ -12,6 +12,9 @@ namespace ServerMaster.Models
         public int WindowHeight { get; set; }
         /// <summary>拖文件到分格时直接 SMB 上传到的远端目录（空=默认 C:\Users\Public\Desktop）。</summary>
         public string DragDropRemoteDir { get; set; }
+        /// <summary>默认远端桌面分辨率——固定值，不随分格大小变化，画面仅做显示端缩放。</summary>
+        public int DesktopWidth { get; set; }
+        public int DesktopHeight { get; set; }
 
         public AppSettings()
         {
@@ -21,6 +24,8 @@ namespace ServerMaster.Models
             WindowWidth = 1400;
             WindowHeight = 900;
             DragDropRemoteDir = "";
+            DesktopWidth = 1920;
+            DesktopHeight = 1080;
         }
     }
 

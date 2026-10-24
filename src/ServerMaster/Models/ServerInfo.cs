@@ -22,6 +22,9 @@ namespace ServerMaster.Models
         public bool RedirectDrives { get; set; }
         public bool AutoReconnect { get; set; }
         public string Notes { get; set; }
+        /// <summary>固定远端分辨率（0=跟随全局默认）。分辨率不随分格/窗口变化，只做显示端缩放。</summary>
+        public int DesktopWidth { get; set; }
+        public int DesktopHeight { get; set; }
 
         public ServerInfo()
         {
@@ -37,6 +40,8 @@ namespace ServerMaster.Models
             RedirectDrives = false;
             AutoReconnect = true;
             Notes = "";
+            DesktopWidth = 0;
+            DesktopHeight = 0;
         }
 
         public string DisplayName
@@ -51,6 +56,7 @@ namespace ServerMaster.Models
             c.Username = Username; c.EncryptedPassword = EncryptedPassword; c.Group = Group;
             c.ConnectToConsole = ConnectToConsole; c.ColorDepth = ColorDepth;
             c.RedirectDrives = RedirectDrives; c.AutoReconnect = AutoReconnect; c.Notes = Notes;
+            c.DesktopWidth = DesktopWidth; c.DesktopHeight = DesktopHeight;
             return c;
         }
     }

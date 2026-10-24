@@ -81,6 +81,7 @@ namespace ServerMaster.UI
             mTools.DropDownItems.Add("从 FinalShell 导入…", null, delegate { ImportFinalShell(); });
             mTools.DropDownItems.Add("批量文件传输…", null, delegate { OpenTransfer(); });
             mTools.DropDownItems.Add("设置拖放上传目录…", null, delegate { SetDragDropDir(); });
+            mTools.DropDownItems.Add("设置默认远端分辨率…", null, delegate { SetDefaultResolution(); });
             mTools.DropDownItems.Add("打开配置目录", null, delegate { OpenDir(ConfigStore.ConfigDir); });
             mTools.DropDownItems.Add("打开日志目录", null,
                 delegate { OpenDir(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ServerMaster", "logs")); });
@@ -105,7 +106,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.2\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.2.1\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -243,14 +244,10 @@ namespace ServerMaster.UI
                 CloseSession(existing);
             }
 
-            // 初始桌面分辨率按分格实际宽高比计算（行×列），保证远端画面铺满分格不出现黑边
-            int count = _grid.Tiles.Count + 1;
-            int cols = _grid.MaxColumns > 0 ? Math.Min(_grid.MaxColumns, count)
-                     : (int)Math.Ceiling(Math.Sqrt(count));
-            if (cols < 1) cols = 1;
-            int rows = (int)Math.Ceiling(count / (double)cols);
-            int w = Math.Max(640, _grid.ClientSize.Width / cols);
-            int h = Math.Max(480, _grid.ClientSize.Height / rows);
+            // 远端分辨率固定（服务器桌面分辨率不被改变，正在运行的程序窗口不受影响），
+            // 画面按分格大小等比缩放显示（SmartSizing 纯显示端缩放）
+            int w = s.DesktopWidth > 0 ? s.DesktopWidth : _cfg.Settings.DesktopWidth;
+            int h = s.DesktopHeight > 0 ? s.DesktopHeight : _cfg.Settings.DesktopHeight;
 
             RdpSession session = _conn.Create(s);
             session.StateChanged += session_StateChanged;
@@ -551,6 +548,82 @@ namespace ServerMaster.UI
                 else action();
             }
             catch { }
+        }
+
+        /// <summary>设置默认远端桌面分辨率（固定值；连接时不再改变服务器桌面分辨率）。</summary>
+        private void SetDefaultResolution()
+        {
+            using (Form dlg = new Form())
+            {
+                dlg.Text = "默认远端桌面分辨率";
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.ClientSize = new Size(400, 130);
+                dlg.MaximizeBox = false;
+                dlg.MinimizeBox = false;
+
+                Label l1 = new Label();
+                l1.Text = "连接时使用的固定分辨率（画面按分格等比缩放显示）:";
+                l1.SetBounds(12, 10, 380, 20);
+                dlg.Controls.Add(l1);
+
+                Label lW = new Label();
+                lW.Text = "宽:";
+                lW.SetBounds(12, 42, 24, 20);
+                dlg.Controls.Add(lW);
+                TextBox txtW = new TextBox();
+                txtW.SetBounds(40, 39, 70, 24);
+                txtW.Text = _cfg.Settings.DesktopWidth.ToString();
+                dlg.Controls.Add(txtW);
+
+                Label lH = new Label();
+                lH.Text = "高:";
+                lH.SetBounds(124, 42, 24, 20);
+                dlg.Controls.Add(lH);
+                TextBox txtH = new TextBox();
+                txtH.SetBounds(152, 39, 70, 24);
+                txtH.Text = _cfg.Settings.DesktopHeight.ToString();
+                dlg.Controls.Add(txtH);
+
+                Label l2 = new Label();
+                l2.Text = "建议设成你平时远程桌面使用的分辨率，程序窗口位置即可保持不变";
+                l2.AutoSize = true;
+                l2.ForeColor = Color.FromArgb(110, 110, 118);
+                l2.SetBounds(12, 70, 380, 18);
+                dlg.Controls.Add(l2);
+
+                Button ok = new Button();
+                ok.Text = "确定";
+                ok.SetBounds(212, 96, 80, 26);
+                ok.DialogResult = DialogResult.OK;
+                dlg.Controls.Add(ok);
+
+                Button ca = new Button();
+                ca.Text = "取消";
+                ca.SetBounds(300, 96, 80, 26);
+                ca.DialogResult = DialogResult.Cancel;
+                dlg.Controls.Add(ca);
+                dlg.AcceptButton = ok;
+                dlg.CancelButton = ca;
+
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    int w, h;
+                    if (int.TryParse(txtW.Text.Trim(), out w) && int.TryParse(txtH.Text.Trim(), out h) &&
+                        w >= 640 && w <= 4096 && h >= 480 && h <= 2160)
+                    {
+                        _cfg.Settings.DesktopWidth = w;
+                        _cfg.Settings.DesktopHeight = h;
+                        ConfigStore.Save(_cfg);
+                        ShowMsg("默认远端分辨率已设为 " + w + "×" + h + "（对之后的新连接生效）");
+                    }
+                    else
+                    {
+                        MessageBox.Show(this, "分辨率无效（宽 640-4096，高 480-2160）", "验证",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                }
+            }
         }
 
         /// <summary>设置拖放直传的远端目标目录。</summary>

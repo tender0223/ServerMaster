@@ -18,6 +18,7 @@ namespace ServerMaster.UI
         private readonly TextBox _txtPass;
         private readonly ComboBox _cmbGroup;
         private readonly ComboBox _cmbColor;
+        private readonly ComboBox _cmbResolution;
         private readonly CheckBox _chkConsole;
         private readonly CheckBox _chkDrives;
         private readonly CheckBox _chkReconnect;
@@ -38,7 +39,7 @@ namespace ServerMaster.UI
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(380, 430);
+            ClientSize = new Size(380, 468);
             Font = new Font("Microsoft YaHei UI", 9F);
 
             int y = 14;
@@ -88,6 +89,18 @@ namespace ServerMaster.UI
             _cmbColor.Items.Add("32 位 (单画面)");
             _cmbColor.SelectedIndex = 2;
             Controls.Add(_cmbColor);
+            y += 34;
+            l = MakeLabel("远端分辨率:", labelX, y + 3); Controls.Add(l);
+            _cmbResolution = new ComboBox();
+            _cmbResolution.DropDownStyle = ComboBoxStyle.DropDownList;
+            _cmbResolution.SetBounds(inputX, y, inputW, 24);
+            _cmbResolution.Items.Add("跟随全局默认");
+            _cmbResolution.Items.Add("1920 × 1080");
+            _cmbResolution.Items.Add("1600 × 900");
+            _cmbResolution.Items.Add("1366 × 768");
+            _cmbResolution.Items.Add("1280 × 720");
+            _cmbResolution.Items.Add("1024 × 768");
+            Controls.Add(_cmbResolution);
             y += 34;
             _chkConsole = new CheckBox();
             _chkConsole.Text = "连接到控制台会话 (ConnectToAdministerServer)";
@@ -146,11 +159,25 @@ namespace ServerMaster.UI
                 _chkDrives.Checked = _existing.RedirectDrives;
                 _chkReconnect.Checked = _existing.AutoReconnect;
                 _txtNotes.Text = _existing.Notes;
+                _cmbResolution.SelectedIndex = ResolveResIndexOrInsert(_existing.DesktopWidth, _existing.DesktopHeight);
             }
             else
             {
                 _cmbGroup.Text = _groups.Count > 0 ? _groups[0] : "默认分组";
             }
+        }
+
+        /// <summary>分辨率下拉框索引：0=跟随全局默认；非预设值动态插入一项以保留原值。</summary>
+        private int ResolveResIndexOrInsert(int w, int h)
+        {
+            if (w <= 0 || h <= 0) return 0;
+            if (w == 1920 && h == 1080) return 1;
+            if (w == 1600 && h == 900) return 2;
+            if (w == 1366 && h == 768) return 3;
+            if (w == 1280 && h == 720) return 4;
+            if (w == 1024 && h == 768) return 5;
+            _cmbResolution.Items.Insert(1, w + " × " + h);
+            return 1;
         }
 
         private Label MakeLabel(string text, int x, int y)
@@ -238,6 +265,17 @@ namespace ServerMaster.UI
             int[] depths = new int[] { 8, 15, 16, 24, 32 };
             int colorDepth = depths[Math.Max(0, _cmbColor.SelectedIndex)];
 
+            // 远端分辨率：0/0 = 跟随全局默认
+            int rw = 0, rh = 0;
+            if (_cmbResolution.SelectedIndex > 0)
+            {
+                string resText = _cmbResolution.SelectedItem.ToString();
+                string[] parts = resText.Split('×');
+                int.TryParse(parts[0].Trim(), out rw);
+                if (parts.Length > 1) int.TryParse(parts[1].Trim(), out rh);
+                if (rw < 640 || rh < 480) { rw = 0; rh = 0; }
+            }
+
             ServerInfo r = _existing == null ? new ServerInfo() : _existing.Clone();
             r.Name = _txtName.Text.Trim();
             r.Host = hostOnly;
@@ -252,6 +290,8 @@ namespace ServerMaster.UI
             r.RedirectDrives = _chkDrives.Checked;
             r.AutoReconnect = _chkReconnect.Checked;
             r.Notes = _txtNotes.Text.Trim();
+            r.DesktopWidth = rw;
+            r.DesktopHeight = rh;
 
             Result = r;
             DialogResult = DialogResult.OK;
