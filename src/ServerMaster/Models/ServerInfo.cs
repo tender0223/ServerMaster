@@ -49,6 +49,12 @@ namespace ServerMaster.Models
             get { return string.IsNullOrEmpty(Name) ? Host : Name; }
         }
 
+        /// <summary>列表/下拉框里显示"名称 (host:port)"。</summary>
+        public override string ToString()
+        {
+            return DisplayName + " (" + Host + ":" + Port + ")";
+        }
+
         public ServerInfo Clone()
         {
             ServerInfo c = new ServerInfo();

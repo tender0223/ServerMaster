@@ -19,6 +19,7 @@ namespace ServerMaster.UI
     public class FileTransferForm : Form
     {
         private readonly AppConfig _cfg;
+        private readonly HashSet<string> _connectedIds;
         private CheckedListBox _lstServers;
         private TextBox _txtRemoteDir;
         private ListBox _lstFiles;
@@ -33,14 +34,15 @@ namespace ServerMaster.UI
         private Thread _worker;
         private volatile bool _cancel;
 
-        public FileTransferForm(AppConfig cfg)
+        public FileTransferForm(AppConfig cfg, HashSet<string> connectedIds)
         {
             _cfg = cfg;
+            _connectedIds = connectedIds ?? new HashSet<string>();
 
             Text = "批量文件传输";
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(660, 560);
-            MinimumSize = new Size(620, 520);
+            ClientSize = new Size(720, 560);
+            MinimumSize = new Size(680, 520);
             Font = new Font("Microsoft YaHei UI", 9F);
 
             BuildUi();
@@ -56,15 +58,26 @@ namespace ServerMaster.UI
             Controls.Add(l1);
 
             _lstServers = new CheckedListBox();
-            _lstServers.SetBounds(12, 32, 200, 170);
+            _lstServers.SetBounds(12, 32, 236, 170);
             _lstServers.CheckOnClick = true;
             _lstServers.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Bottom;
+            _lstServers.ItemCheck += delegate(object s, ItemCheckEventArgs e)
+            {
+                BeginInvoke((MethodInvoker)delegate { UpdateStartButton(); });
+            };
             Controls.Add(_lstServers);
+
+            Label lHintSel = new Label();
+            lHintSel.Text = "已连接的服务器自动勾选";
+            lHintSel.AutoSize = true;
+            lHintSel.ForeColor = Color.FromArgb(110, 110, 118);
+            lHintSel.Location = new Point(12, 204);
+            Controls.Add(lHintSel);
 
             // ---- 上传区 ----
             GroupBox gUpload = new GroupBox();
-            gUpload.Text = "上传 (本地 → 多台服务器相同路径)";
-            gUpload.SetBounds(222, 8, 428, 200);
+            gUpload.Text = "上传 (本机 → 多台服务器相同路径)";
+            gUpload.SetBounds(256, 8, 452, 200);
             gUpload.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             Controls.Add(gUpload);
 
@@ -116,16 +129,16 @@ namespace ServerMaster.UI
             gUpload.Controls.Add(btnClip);
 
             Label lHint = new Label();
-            lHint.Text = "剪贴板: 推送后在任意远程会话里 Ctrl+V 即可粘贴";
+            lHint.Text = "推送后切到远端会话 Ctrl+V 即可粘贴";
             lHint.AutoSize = true;
             lHint.ForeColor = Color.FromArgb(110, 110, 118);
-            lHint.Location = new Point(300, 178);
+            lHint.Location = new Point(10, 178);
             gUpload.Controls.Add(lHint);
 
             // ---- 下载区 ----
             GroupBox gDown = new GroupBox();
             gDown.Text = "下载 (服务器 → 本地)";
-            gDown.SetBounds(12, 208, 638, 62);
+            gDown.SetBounds(12, 208, 696, 62);
             gDown.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             Controls.Add(gDown);
 
@@ -147,12 +160,12 @@ namespace ServerMaster.UI
             gDown.Controls.Add(l4);
 
             _txtLocalSave = new TextBox();
-            _txtLocalSave.SetBounds(332, 24, 200, 24);
+            _txtLocalSave.SetBounds(336, 24, 220, 24);
             gDown.Controls.Add(_txtLocalSave);
 
             Button btnBrowse = new Button();
             btnBrowse.Text = "…";
-            btnBrowse.SetBounds(536, 23, 30, 25);
+            btnBrowse.SetBounds(560, 23, 30, 25);
             btnBrowse.Click += delegate
             {
                 using (FolderBrowserDialog d = new FolderBrowserDialog())
@@ -164,27 +177,27 @@ namespace ServerMaster.UI
 
             Button btnDownload = new Button();
             btnDownload.Text = "开始下载";
-            btnDownload.SetBounds(572, 23, 58, 25);
+            btnDownload.SetBounds(594, 23, 90, 25);
             btnDownload.Click += btnDownload_Click;
             gDown.Controls.Add(btnDownload);
 
             // ---- 进度/日志/开始 ----
             _btnStart = new Button();
             _btnStart.Text = "开始上传";
-            _btnStart.SetBounds(222, 278, 100, 30);
+            _btnStart.SetBounds(256, 278, 110, 30);
             _btnStart.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             _btnStart.Click += btnStart_Click;
             Controls.Add(_btnStart);
 
             Button btnCancel = new Button();
             btnCancel.Text = "取消传输";
-            btnCancel.SetBounds(330, 278, 90, 30);
+            btnCancel.SetBounds(374, 278, 90, 30);
             btnCancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
             btnCancel.Click += delegate { _cancel = true; Status("正在取消…"); };
             Controls.Add(btnCancel);
 
             _progress = new ProgressBar();
-            _progress.SetBounds(12, 316, 638, 18);
+            _progress.SetBounds(12, 316, 696, 18);
             _progress.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             Controls.Add(_progress);
 
@@ -200,7 +213,7 @@ namespace ServerMaster.UI
             _txtLog.ScrollBars = ScrollBars.Vertical;
             _txtLog.ReadOnly = true;
             _txtLog.Font = new Font("Consolas", 8.5F);
-            _txtLog.SetBounds(12, 358, 638, 190);
+            _txtLog.SetBounds(12, 358, 696, 190);
             _txtLog.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
             Controls.Add(_txtLog);
 
@@ -222,7 +235,15 @@ namespace ServerMaster.UI
         private void LoadServers()
         {
             foreach (ServerInfo s in _cfg.Servers)
-                _lstServers.Items.Add(s, false);
+                _lstServers.Items.Add(s, _connectedIds.Contains(s.Id));
+            UpdateStartButton();
+        }
+
+        /// <summary>开始按钮实时显示本次目标台数。</summary>
+        private void UpdateStartButton()
+        {
+            int n = _lstServers.CheckedItems.Count;
+            _btnStart.Text = n > 0 ? "开始上传(" + n + "台)" : "开始上传";
         }
 
         private List<ServerInfo> GetSelectedServers()
