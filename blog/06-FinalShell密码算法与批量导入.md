@@ -1,3 +1,11 @@
+---
+title: ServerMaster 系列(六)：FinalShell密码算法与批量导入
+date: 2026-10-24 14:59:23
+tags:
+  - RDP
+description: ""
+---
+
 # 06 · FinalShell 密码算法与批量导入
 
 > 《从零写一个多服务器 RDP 批量管理工具》第 6 篇。[系列目录](00-系列总览.md)
