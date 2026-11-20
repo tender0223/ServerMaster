@@ -6,6 +6,10 @@ build.sources.rsp
 
 # 本地打包产物（发布时另行保存）
 release/
+发布/
+
+# 便携配置含加密凭据，不入库
+*.smc
 
 # VS
 .vs/

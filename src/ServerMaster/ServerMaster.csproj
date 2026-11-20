@@ -6,12 +6,18 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>ServerMaster</RootNamespace>
     <AssemblyName>ServerMaster</AssemblyName>
-    <Version>0.3.1</Version>
+    <Version>0.4.1</Version>
     <Product>ServerMaster 多服务器批量管理工具</Product>
     <Description>多画面 RDP 同屏 / 键鼠广播 / 批量文件传输 (基于微软官方 mstscax ActiveX)</Description>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="app.ico" />
+    <EmbeddedResource Include="app.ico" LogicalName="ServerMaster.app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- AxImp 从系统 mstscax.dll 生成的互操作程序集（见 lib/ 与 docs/设计文档.md） -->

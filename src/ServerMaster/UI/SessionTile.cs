@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Windows.Forms;
 using ServerMaster.Models;
 using ServerMaster.Rdp;
+using ServerMaster.Services;
 
 namespace ServerMaster.UI
 {
@@ -12,7 +13,13 @@ namespace ServerMaster.UI
     /// </summary>
     public class SessionTile : Panel
     {
+        private static readonly Color HeaderNormal = Color.FromArgb(60, 60, 66);
+        private static readonly Color HeaderMaster = Color.FromArgb(0, 122, 204);
+        private static readonly Color HeaderReceiving = Color.FromArgb(12, 112, 92);
+        private static readonly Color AccentReceiving = Color.FromArgb(0, 214, 170);
+
         private readonly Panel _header;
+        private readonly Panel _accent;
         private readonly Label _lblName;
         private readonly Label _lblStatus;
         private readonly CheckBox _chkBroadcast;
@@ -20,7 +27,11 @@ namespace ServerMaster.UI
         private readonly Button _btnClose;
         private readonly Panel _body;
         private readonly Label _placeholder;
+        private readonly ToolTip _tip;
         private bool _isMaster;
+        private bool _receiving;
+        private SessionState _state;
+        private string _stateNote;
 
         public RdpSession Session { get; private set; }
         public bool IsBroadcastTarget { get { return _chkBroadcast.Checked; } }
@@ -42,7 +53,14 @@ namespace ServerMaster.UI
             _header = new Panel();
             _header.Dock = DockStyle.Top;
             _header.Height = 28;
-            _header.BackColor = Color.FromArgb(60, 60, 66);
+            _header.BackColor = HeaderNormal;
+
+            _accent = new Panel();
+            _accent.BackColor = AccentReceiving;
+            _accent.SetBounds(0, 0, 4, _header.Height);
+            _accent.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left;
+            _accent.Visible = false;
+            _header.Controls.Add(_accent);
 
             _lblName = new Label();
             _lblName.Text = session.Server.DisplayName;
@@ -69,6 +87,9 @@ namespace ServerMaster.UI
             _chkBroadcast.Location = new Point(0, 4);
             _chkBroadcast.CheckedChanged += OnBroadcastCheckedChanged;
             _header.Controls.Add(_chkBroadcast);
+
+            _tip = new ToolTip();
+            _tip.SetToolTip(_chkBroadcast, "勾选后，开启工具栏「广播输入」时，本分格同步接收主控分格的键鼠操作");
 
             _btnZoom = new Button();
             _btnZoom.Text = "▣";
@@ -161,11 +182,9 @@ namespace ServerMaster.UI
 
         private void ActivateMaster()
         {
-            if (!_isMaster)
-            {
-                _isMaster = true;
-                _header.BackColor = Color.FromArgb(0, 122, 204);
-            }
+            _isMaster = true;
+            UpdateHeaderColor();
+            UpdateStatusText();
             if (MasterActivated != null) MasterActivated(this);
         }
 
@@ -173,7 +192,58 @@ namespace ServerMaster.UI
         public void ClearMasterHighlight()
         {
             _isMaster = false;
-            _header.BackColor = Color.FromArgb(60, 60, 66);
+            UpdateHeaderColor();
+            UpdateStatusText();
+        }
+
+        /// <summary>广播接收视觉：全局广播开启且本分格是接收目标时高亮标题栏。</summary>
+        public void SetBroadcastVisual(bool receiving, bool master)
+        {
+            _receiving = receiving;
+            _isMaster = master;
+            UpdateHeaderColor();
+            UpdateStatusText();
+            PositionHeaderItems();
+        }
+
+        /// <summary>设置标题栏显示内容：0=备注名，1=不显示，2=主机名，3=主机IP+端口。</summary>
+        public void ApplyTitleMode(int mode)
+        {
+            string host;
+            int port;
+            HostPort.Split(Session.Server.Host, out host, out port);
+            if (port <= 0) port = Session.Server.Port;
+
+            switch (mode)
+            {
+                case 1:
+                    _lblName.Text = "";
+                    _lblName.Visible = false;
+                    break;
+                case 2:
+                    _lblName.Text = host;
+                    _lblName.Visible = true;
+                    break;
+                case 3:
+                    _lblName.Text = host + ":" + port;
+                    _lblName.Visible = true;
+                    break;
+                default:
+                    _lblName.Text = Session.Server.DisplayName;
+                    _lblName.Visible = true;
+                    break;
+            }
+            PositionHeaderItems();
+        }
+
+        private void UpdateHeaderColor()
+        {
+            if (_isMaster) _header.BackColor = HeaderMaster;
+            else if (_receiving) _header.BackColor = HeaderReceiving;
+            else _header.BackColor = HeaderNormal;
+
+            _accent.Visible = _receiving && !_isMaster;
+            _chkBroadcast.ForeColor = _receiving ? AccentReceiving : Color.FromArgb(235, 235, 240);
         }
 
         public void SetBroadcastTarget(bool value, bool raiseEvent)
@@ -193,8 +263,19 @@ namespace ServerMaster.UI
 
         public void SetState(SessionState st, string note)
         {
-            string suffix = string.IsNullOrEmpty(note) ? "" : " · " + note;
-            switch (st)
+            _state = st;
+            _stateNote = note ?? "";
+            UpdateStatusText();
+            PositionHeaderItems();
+        }
+
+        private void UpdateStatusText()
+        {
+            string suffix = string.IsNullOrEmpty(_stateNote) ? "" : " · " + _stateNote;
+            if (_receiving) suffix += " · 接收广播";
+            else if (_isMaster) suffix += " · 主控";
+
+            switch (_state)
             {
                 case SessionState.Disconnected:
                     _lblStatus.Text = "○ 未连接" + suffix;
@@ -205,7 +286,7 @@ namespace ServerMaster.UI
                     _lblStatus.ForeColor = Color.FromArgb(235, 200, 90);
                     break;
                 case SessionState.Connected:
-                    _lblStatus.Text = "● 已连接";
+                    _lblStatus.Text = "● 已连接" + suffix;
                     _lblStatus.ForeColor = Color.FromArgb(120, 220, 130);
                     break;
                 case SessionState.Reconnecting:

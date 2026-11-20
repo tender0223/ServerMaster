@@ -1,8 +1,8 @@
 ---
 title: ServerMaster 系列(六)：FinalShell密码算法与批量导入
 date: 2026-10-24 14:59:23
-tags:
-  - RDP
+tags: ["AI项目程序", "办公工具"]
+categories: ["AI项目程序", "办公工具", "服务器管理工具"]
 description: ""
 ---
 

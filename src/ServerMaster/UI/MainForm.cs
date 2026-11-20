@@ -19,10 +19,14 @@ namespace ServerMaster.UI
         private readonly InputBroadcastService _broadcast;
         private ServerListPanel _listPanel;
         private SessionGridPanel _grid;
+        private SplitContainer _split;
         private readonly Dictionary<string, SessionTile> _tiles = new Dictionary<string, SessionTile>();
 
         private ToolStrip _toolbar;
         private ToolStripButton _btnBroadcast;
+        private ToolStripButton _btnSidebar;
+        private ToolStripMenuItem _miShowSidebar;
+        private ToolStripMenuItem[] _miTitleModes;
         private ToolStripComboBox _cmbLayout;
         private StatusStrip _status;
         private ToolStripStatusLabel _lblConn;
@@ -36,6 +40,7 @@ namespace ServerMaster.UI
             Font = new Font("Microsoft YaHei UI", 9F);
             MinimumSize = new Size(960, 620);
             Size = new Size(1400, 900);
+            LoadAppIcon();
 
             _cfg = ConfigStore.Load();
             _conn = new ConnectionManager();
@@ -58,10 +63,26 @@ namespace ServerMaster.UI
 
             Load += delegate
             {
-                if (_cfg.Settings.WindowWidth > 0 && _cfg.Settings.WindowHeight > 0)
-                    Size = new Size(_cfg.Settings.WindowWidth, _cfg.Settings.WindowHeight);
+                RestoreWindowPlacement();
+                SetSidebarVisible(_cfg.Settings.ShowServerPanel, false);
+                BeginInvoke((MethodInvoker)delegate { ApplyServerPanelWidth(); });
                 UpdateStatus();
             };
+        }
+
+        /// <summary>优先用内嵌 ico（多尺寸），回退到 exe 关联图标。</summary>
+        private void LoadAppIcon()
+        {
+            try
+            {
+                using (Stream s = typeof(MainForm).Assembly.GetManifestResourceStream("ServerMaster.app.ico"))
+                {
+                    if (s != null) { Icon = new System.Drawing.Icon(s); return; }
+                }
+            }
+            catch { }
+            try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+            catch { }
         }
 
         #region UI 构建
@@ -71,14 +92,18 @@ namespace ServerMaster.UI
             MenuStrip menu = new MenuStrip();
 
             ToolStripMenuItem mFile = new ToolStripMenuItem("文件(&F)");
-            mFile.DropDownItems.Add("导入配置…", null, delegate { ImportConfig(); });
-            mFile.DropDownItems.Add("导出配置…", null, delegate { ExportConfig(); });
+            mFile.DropDownItems.Add("导入配置（.json / .smc）…", null, delegate { ImportConfig(); });
+            ToolStripMenuItem mExport = new ToolStripMenuItem("导出配置");
+            mExport.DropDownItems.Add("普通导出（换机需重输密码）…", null, delegate { ExportStandard(); });
+            mExport.DropDownItems.Add("便携导出（换机导入即用）…", null, delegate { ExportPortable(); });
+            mFile.DropDownItems.Add(mExport);
+            mFile.DropDownItems.Add(new ToolStripSeparator());
+            mFile.DropDownItems.Add("删除全部服务器…", null, delegate { DeleteAllServers(); });
             mFile.DropDownItems.Add(new ToolStripSeparator());
             mFile.DropDownItems.Add("退出", null, delegate { Close(); });
             menu.Items.Add(mFile);
 
             ToolStripMenuItem mTools = new ToolStripMenuItem("工具(&T)");
-            mTools.DropDownItems.Add("从 FinalShell 导入…", null, delegate { ImportFinalShell(); });
             mTools.DropDownItems.Add("批量文件传输…", null, delegate { OpenTransfer(); });
             mTools.DropDownItems.Add("设置拖放上传目录…", null, delegate { SetDragDropDir(); });
             mTools.DropDownItems.Add("设置默认远端分辨率…", null, delegate { SetDefaultResolution(); });
@@ -86,6 +111,19 @@ namespace ServerMaster.UI
             mTools.DropDownItems.Add("打开日志目录", null,
                 delegate { OpenDir(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ServerMaster", "logs")); });
             menu.Items.Add(mTools);
+
+            ToolStripMenuItem mView = new ToolStripMenuItem("视图(&V)");
+            _miShowSidebar = new ToolStripMenuItem("显示服务器列表栏");
+            _miShowSidebar.CheckOnClick = true;
+            _miShowSidebar.Checked = _cfg.Settings.ShowServerPanel;
+            _miShowSidebar.Click += delegate { SetSidebarVisible(_miShowSidebar.Checked, true); };
+            mView.DropDownItems.Add(_miShowSidebar);
+            mView.DropDownItems.Add(new ToolStripSeparator());
+
+            ToolStripMenuItem miTitle = new ToolStripMenuItem("分格标题显示");
+            BuildTitleModeMenu(miTitle);
+            mView.DropDownItems.Add(miTitle);
+            menu.Items.Add(mView);
 
             ToolStripMenuItem mHelp = new ToolStripMenuItem("帮助(&H)");
             mHelp.DropDownItems.Add("查看设计文档", null, delegate
@@ -106,7 +144,7 @@ namespace ServerMaster.UI
             mHelp.DropDownItems.Add("关于 ServerMaster", null, delegate
             {
                 MessageBox.Show(this,
-                    "ServerMaster 多服务器批量管理工具 v0.3.1\n\n" +
+                    "ServerMaster 多服务器批量管理工具 v0.4.1\n\n" +
                     "多画面 RDP 同屏 · 键鼠同步广播 · 批量/直传文件传输\n" +
                     "FinalShell 导入 · 按组/批量删除\n" +
                     "基于微软官方 RDP ActiveX (mstscax)\n" +
@@ -126,9 +164,14 @@ namespace ServerMaster.UI
             _toolbar.GripStyle = ToolStripGripStyle.Hidden;
             _toolbar.Dock = DockStyle.Top;
 
-            _toolbar.Items.Add("＋ 添加服务器", null, delegate { ShowEdit(null); });
+            ToolStripDropDownButton btnAdd = new ToolStripDropDownButton("＋ 添加服务器");
+            btnAdd.DropDownItems.Add("添加单台服务器…", null, delegate { ShowEdit(null); });
+            btnAdd.DropDownItems.Add("文本批量添加…", null, delegate { BulkAddServers(); });
+            btnAdd.DropDownItems.Add(new ToolStripSeparator());
+            btnAdd.DropDownItems.Add("从 FinalShell 导入…", null, delegate { ImportFinalShell(); });
+            _toolbar.Items.Add(btnAdd);
             _toolbar.Items.Add(new ToolStripSeparator());
-            _toolbar.Items.Add("▶ 全部连接", null, delegate { ConnectCheckedOrAll(); });
+            _toolbar.Items.Add("▶ 连接全部", null, delegate { ConnectAllServers(); });
             _toolbar.Items.Add("■ 全部断开", null, delegate { DisconnectAll(); });
             _toolbar.Items.Add(new ToolStripSeparator());
 
@@ -151,6 +194,14 @@ namespace ServerMaster.UI
                 ConfigStore.Save(_cfg);
             };
             _toolbar.Items.Add(_cmbLayout);
+            _toolbar.Items.Add(new ToolStripSeparator());
+
+            _btnSidebar = new ToolStripButton("服务器栏");
+            _btnSidebar.CheckOnClick = true;
+            _btnSidebar.Checked = _cfg.Settings.ShowServerPanel;
+            _btnSidebar.ToolTipText = "显示或隐藏左侧服务器列表栏";
+            _btnSidebar.Click += delegate { SetSidebarVisible(_btnSidebar.Checked, true); };
+            _toolbar.Items.Add(_btnSidebar);
             _toolbar.Items.Add(new ToolStripSeparator());
 
             _btnBroadcast = new ToolStripButton("🔴 广播输入: 关");
@@ -178,30 +229,30 @@ namespace ServerMaster.UI
 
         private void BuildBody()
         {
-            SplitContainer split = new SplitContainer();
-            split.Dock = DockStyle.Fill;
-            split.FixedPanel = FixedPanel.Panel1;
-            split.SplitterDistance = 260;
+            _split = new SplitContainer();
+            _split.Dock = DockStyle.Fill;
+            _split.FixedPanel = FixedPanel.Panel1;
+            _split.SplitterDistance = 260;
 
             _listPanel = new ServerListPanel();
-            _listPanel.AddRequested += delegate { ShowEdit(null); };
             _listPanel.EditRequested += delegate(ServerInfo s) { ShowEdit(s); };
             _listPanel.DeleteRequested += delegate(ServerInfo s) { DeleteServer(s); };
+            _listPanel.ConnectCheckedRequested += delegate { ConnectCheckedServers(); };
             _listPanel.ConnectRequested += delegate(ServerInfo s) { ConnectServer(s); };
             _listPanel.DisconnectRequested += delegate(ServerInfo s) { DisconnectServer(s); };
+            _listPanel.DisconnectCheckedRequested += delegate(List<ServerInfo> targets) { DisconnectCheckedServers(targets); };
             _listPanel.ConnectGroupRequested += delegate(string g) { ConnectGroupServers(g); };
             _listPanel.DeleteGroupRequested += delegate(string g) { DeleteGroupServers(g); };
-            _listPanel.DeleteAllRequested += delegate { DeleteAllServers(); };
             _listPanel.DeleteCheckedRequested += delegate(List<ServerInfo> targets) { DeleteCheckedServers(targets); };
             _listPanel.MoveServerRequested += delegate(ServerInfo s, string g) { MoveServerToGroup(s, g); };
             _listPanel.RenameGroupRequested += delegate(string oldName, string newName) { RenameGroup(oldName, newName); };
-            split.Panel1.Controls.Add(_listPanel);
+            _split.Panel1.Controls.Add(_listPanel);
 
             _grid = new SessionGridPanel();
-            split.Panel2.Controls.Add(_grid);
+            _split.Panel2.Controls.Add(_grid);
 
-            Controls.Add(split);
-            split.BringToFront();
+            Controls.Add(_split);
+            _split.BringToFront();
         }
 
         private void BuildStatus()
@@ -222,6 +273,95 @@ namespace ServerMaster.UI
         {
             if (maxColumns >= 0 && maxColumns < _cmbLayout.Items.Count)
                 _cmbLayout.SelectedIndex = maxColumns;
+        }
+
+        private void BuildTitleModeMenu(ToolStripMenuItem parent)
+        {
+            string[] labels = new string[] { "备注名", "不显示", "主机名", "主机 IP + 端口" };
+            _miTitleModes = new ToolStripMenuItem[labels.Length];
+            for (int i = 0; i < labels.Length; i++)
+            {
+                int mode = i;
+                ToolStripMenuItem mi = new ToolStripMenuItem(labels[i]);
+                mi.Checked = (_cfg.Settings.SessionTitleMode == mode);
+                mi.Click += delegate { SetSessionTitleMode(mode); };
+                _miTitleModes[i] = mi;
+                parent.DropDownItems.Add(mi);
+            }
+        }
+
+        /// <summary>设置分格标题显示内容：0=备注名，1=不显示，2=主机名，3=主机IP+端口。</summary>
+        private void SetSessionTitleMode(int mode)
+        {
+            _cfg.Settings.SessionTitleMode = mode;
+            if (_miTitleModes != null)
+                for (int i = 0; i < _miTitleModes.Length; i++)
+                    if (_miTitleModes[i] != null) _miTitleModes[i].Checked = (i == mode);
+
+            ConfigStore.Save(_cfg);
+            foreach (KeyValuePair<string, SessionTile> kv in _tiles)
+                kv.Value.ApplyTitleMode(mode);
+        }
+
+        /// <summary>显示/隐藏左侧服务器列表栏（记住宽度与显隐状态）。</summary>
+        private void SetSidebarVisible(bool visible, bool persist)
+        {
+            if (_split == null) return;
+            if (visible)
+            {
+                _split.Panel1Collapsed = false;
+                ApplyServerPanelWidth();
+            }
+            else
+            {
+                if (!_split.Panel1Collapsed) _cfg.Settings.ServerPanelWidth = _split.SplitterDistance;
+                _split.Panel1Collapsed = true;
+            }
+
+            _cfg.Settings.ShowServerPanel = visible;
+            if (_btnSidebar != null) _btnSidebar.Checked = visible;
+            if (_miShowSidebar != null) _miShowSidebar.Checked = visible;
+            if (persist) ConfigStore.Save(_cfg);
+        }
+
+        private void ApplyServerPanelWidth()
+        {
+            if (_split == null || _split.Panel1Collapsed || _split.Width <= 0) return;
+            int w = _cfg.Settings.ServerPanelWidth;
+            if (w < 120) w = 260;
+            int max = _split.Width - _split.Panel2MinSize - _split.SplitterWidth;
+            if (max < 120) return;
+            if (w > max) w = max;
+            try { _split.SplitterDistance = w; } catch { }
+        }
+
+        /// <summary>恢复上次的窗口位置/尺寸/最大化状态；位置不在任何屏幕内时交给系统默认摆放。</summary>
+        private void RestoreWindowPlacement()
+        {
+            int w = _cfg.Settings.WindowWidth;
+            int h = _cfg.Settings.WindowHeight;
+            if (w > 0 && h > 0) Size = new Size(w, h);
+
+            if (_cfg.Settings.WindowPositionSaved)
+            {
+                Rectangle r = new Rectangle(_cfg.Settings.WindowLeft, _cfg.Settings.WindowTop, Width, Height);
+                if (IsBoundsVisibleOnScreen(r))
+                {
+                    StartPosition = FormStartPosition.Manual;
+                    Location = new Point(r.Left, r.Top);
+                }
+            }
+            if (_cfg.Settings.WindowMaximized) WindowState = FormWindowState.Maximized;
+        }
+
+        private static bool IsBoundsVisibleOnScreen(Rectangle bounds)
+        {
+            foreach (Screen screen in Screen.AllScreens)
+            {
+                Rectangle inter = Rectangle.Intersect(screen.WorkingArea, bounds);
+                if (inter.Width >= 80 && inter.Height >= 40) return true;
+            }
+            return false;
         }
 
         #endregion
@@ -258,6 +398,7 @@ namespace ServerMaster.UI
             session.DisconnectedWithReason += session_DisconnectedWithReason;
 
             SessionTile tile = new SessionTile(session);
+            tile.ApplyTitleMode(_cfg.Settings.SessionTitleMode);
             tile.CloseRequested += delegate(SessionTile t) { CloseSession(t.Session); };
             tile.ZoomToggled += delegate(SessionTile t) { _grid.ToggleZoom(t); };
             tile.MasterActivated += tile_MasterActivated;
@@ -273,16 +414,41 @@ namespace ServerMaster.UI
             ShowMsg("正在连接 [" + s.DisplayName + "]…");
         }
 
-        private void ConnectCheckedOrAll()
+        /// <summary>一键连接左侧已勾选的服务器；未勾选任何服务器时给出提示。</summary>
+        private void ConnectCheckedServers()
         {
             List<ServerInfo> targets = _listPanel.GetCheckedServers();
-            if (targets.Count == 0) targets = _cfg.Servers;
+            if (targets.Count == 0)
+            {
+                ShowMsg("请先在左侧勾选要连接的服务器");
+                return;
+            }
+
             int n = 0;
             foreach (ServerInfo s in targets)
             {
                 ConnectServer(s);
                 n++;
-                if (n >= 16) break; // 同屏建议上限
+                if (n >= 16)
+                {
+                    ShowMsg("同屏建议上限 16 路，已停止继续连接");
+                    break;
+                }
+            }
+        }
+
+        private void ConnectAllServers()
+        {
+            int n = 0;
+            foreach (ServerInfo s in _cfg.Servers)
+            {
+                ConnectServer(s);
+                n++;
+                if (n >= 16)
+                {
+                    ShowMsg("同屏建议上限 16 路，已停止继续连接");
+                    break;
+                }
             }
         }
 
@@ -290,6 +456,20 @@ namespace ServerMaster.UI
         {
             RdpSession session = _conn.FindByServer(s);
             if (session != null) CloseSession(session);
+        }
+
+        /// <summary>批量断开勾选的服务器；多台时按全局设置确认。</summary>
+        private void DisconnectCheckedServers(List<ServerInfo> targets)
+        {
+            if (targets == null || targets.Count == 0) return;
+            if (targets.Count > 1 && _cfg.Settings.ConfirmCloseAll)
+            {
+                DialogResult r = MessageBox.Show(this,
+                    "确定断开勾选的 " + targets.Count + " 台服务器？", "确认",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (r != DialogResult.Yes) return;
+            }
+            foreach (ServerInfo s in targets) DisconnectServer(s);
         }
 
         private void DisconnectAll()
@@ -324,30 +504,54 @@ namespace ServerMaster.UI
             ShowMsg("[" + server.DisplayName + "] 已移动到分组 [" + newGroup + "]");
         }
 
-        /// <summary>重命名分组（新名已存在时合并两组）。</summary>
+        /// <summary>重命名分组；新名已存在时合并两组，服务器与会话全部保留。</summary>
         private void RenameGroup(string oldName, string newName)
         {
             if (string.IsNullOrEmpty(newName) || newName == oldName) return;
-            if (_cfg.Groups.Contains(newName))
+
+            int moved = 0;
+            foreach (ServerInfo s in _cfg.Servers)
+                if (s.Group == oldName) moved++;
+
+            bool targetExists = _cfg.Groups.Contains(newName);
+            if (!targetExists)
             {
+                foreach (ServerInfo s in _cfg.Servers)
+                    if (s.Group == newName) { targetExists = true; break; }
+            }
+
+            if (targetExists)
+            {
+                int targetCount = 0;
+                foreach (ServerInfo s in _cfg.Servers)
+                    if (s.Group == newName) targetCount++;
+
                 DialogResult r = MessageBox.Show(this,
-                    "分组 [" + newName + "] 已存在，将把 [" + oldName + "] 下的服务器并入其中。继续？",
+                    "分组 [" + newName + "] 已存在，将把 [" + oldName + "] 下的 " + moved +
+                    " 台服务器并入其中（该组现有 " + targetCount + " 台）。\n" +
+                    "合并后服务器和已建立的连接都会保留。继续？",
                     "确认", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
                 if (r != DialogResult.Yes) return;
-                _cfg.Groups.Remove(oldName);
             }
-            else
-            {
-                int idx = _cfg.Groups.IndexOf(oldName);
-                if (idx >= 0) _cfg.Groups[idx] = newName;
-                else _cfg.Groups.Add(newName);
-            }
+
             foreach (ServerInfo s in _cfg.Servers)
                 if (s.Group == oldName) s.Group = newName;
 
+            // 去掉所有旧名残留（防止历史配置里存在重名条目），新名只保留一个
+            int oldIdx = _cfg.Groups.IndexOf(oldName);
+            _cfg.Groups.RemoveAll(delegate(string g) { return g == oldName; });
+            if (!_cfg.Groups.Contains(newName))
+            {
+                if (oldIdx >= 0 && oldIdx <= _cfg.Groups.Count) _cfg.Groups.Insert(oldIdx, newName);
+                else _cfg.Groups.Add(newName);
+            }
+
             ConfigStore.Save(_cfg);
             _listPanel.Rebind(_cfg);
-            ShowMsg("分组已重命名: [" + oldName + "] → [" + newName + "]");
+            if (targetExists)
+                ShowMsg("已合并分组: [" + oldName + "] → [" + newName + "]，保留 " + moved + " 台服务器");
+            else
+                ShowMsg("分组已重命名: [" + oldName + "] → [" + newName + "]");
         }
 
         /// <summary>连接某分组下的全部服务器。</summary>
@@ -732,6 +936,15 @@ namespace ServerMaster.UI
                 }
             }
             _broadcast.SetTargets(targets);
+
+            foreach (SessionTile t in _grid.Tiles)
+            {
+                bool receiving = _broadcast.Enabled && t.IsBroadcastTarget
+                                 && t.Session.State == SessionState.Connected
+                                 && t.Session != _broadcast.Master;
+                t.SetBroadcastVisual(receiving, t.Session == _broadcast.Master);
+            }
+
             string sig = string.Join(",", names.ToArray());
             if (sig != _lastTargetSig)
             {
@@ -859,6 +1072,27 @@ namespace ServerMaster.UI
 
         #region 服务器配置编辑
 
+        /// <summary>文本批量添加服务器（ip:端口|账号|密码|备注|分组）。</summary>
+        private void BulkAddServers()
+        {
+            using (BulkAddForm f = new BulkAddForm(_cfg))
+            {
+                if (f.ShowDialog(this) != DialogResult.OK || f.AddedCount == 0) return;
+                try
+                {
+                    ConfigStore.Save(_cfg);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "服务器已添加，但保存配置失败: " + ex.Message,
+                        "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                _listPanel.Rebind(_cfg);
+                ShowMsg("文本批量添加完成: " + f.AddedCount + " 台" +
+                        (f.SkippedDuplicateCount > 0 ? " (跳过重复 " + f.SkippedDuplicateCount + " 台)" : ""));
+            }
+        }
+
         private void ImportFinalShell()
         {
             using (ImportFinalShellForm f = new ImportFinalShellForm(_cfg))
@@ -921,15 +1155,13 @@ namespace ServerMaster.UI
         {
             using (OpenFileDialog d = new OpenFileDialog())
             {
-                d.Title = "导入配置(将覆盖当前清单)";
-                d.Filter = "ServerMaster 配置|config.json";
+                d.Title = "导入配置（自动识别普通 / 便携）";
+                d.Filter = "ServerMaster 配置 (*.json;*.smc)|*.json;*.smc|普通配置 (*.json)|*.json|便携配置 (*.smc)|*.smc|所有文件 (*.*)|*.*";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    DisconnectAll();
-                    File.Copy(d.FileName, ConfigStore.ConfigFile, true);
-                    ReloadConfig();
-                    ShowMsg("配置已导入(注意: 密码密文仅原机器可解，需重新录入)");
+                    if (PortableConfig.IsPortableFile(d.FileName)) ImportPortable(d.FileName);
+                    else ImportStandard(d.FileName);
                 }
                 catch (Exception ex)
                 {
@@ -938,20 +1170,158 @@ namespace ServerMaster.UI
             }
         }
 
-        private void ExportConfig()
+        private bool ConfirmOverwrite(string detail)
+        {
+            return MessageBox.Show(this,
+                detail + "\n已建立的连接会断开，当前清单会被替换。继续？",
+                "确认导入", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+        }
+
+        /// <summary>普通配置：密码仍是本机 DPAPI 密文，换机后需重输。</summary>
+        private void ImportStandard(string path)
+        {
+            AppConfig imported;
+            try
+            {
+                imported = new System.Web.Script.Serialization.JavaScriptSerializer()
+                    .Deserialize<AppConfig>(File.ReadAllText(path));
+            }
+            catch
+            {
+                MessageBox.Show(this, "文件不是有效的 ServerMaster 配置。", "导入失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (imported == null)
+            {
+                MessageBox.Show(this, "文件内容为空。", "导入失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (imported.Servers == null) imported.Servers = new List<ServerInfo>();
+            if (imported.Groups == null) imported.Groups = new List<string>();
+            if (imported.Settings == null) imported.Settings = new AppSettings();
+
+            if (!ConfirmOverwrite("将导入 " + imported.Servers.Count + " 台服务器、覆盖当前 " +
+                                  _cfg.Servers.Count + " 台服务器。")) return;
+
+            DisconnectAll();
+            ConfigStore.Save(imported);
+            ReloadConfig();
+
+            int needInput = 0;
+            foreach (ServerInfo s in _cfg.Servers)
+                if (!string.IsNullOrEmpty(s.EncryptedPassword) && PasswordProtector.Unprotect(s.EncryptedPassword).Length == 0)
+                    needInput++;
+            if (needInput > 0)
+            {
+                MessageBox.Show(this,
+                    "已导入 " + _cfg.Servers.Count + " 台服务器。\n\n其中 " + needInput +
+                    " 台的密码来自其他电脑，本机无法解密，请在“编辑服务器”中重新输入密码后再连接。",
+                    "导入完成", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowMsg("配置已导入，" + needInput + " 台服务器需重新输入密码");
+            }
+            else
+            {
+                ShowMsg("配置已导入，共 " + _cfg.Servers.Count + " 台服务器");
+            }
+        }
+
+        /// <summary>便携配置：输入访问密码解密，密码即刻转为本机 DPAPI 密文。</summary>
+        private void ImportPortable(string path)
+        {
+            string pwd;
+            using (PassphraseDialog dlg = new PassphraseDialog(
+                "导入便携配置", "该文件已加密，请输入导出时设置的访问密码。", false, "解密"))
+            {
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                pwd = dlg.Passphrase;
+            }
+
+            PortableConfig.Payload payload;
+            try
+            {
+                payload = PortableConfig.Read(path, pwd);
+            }
+            catch (InvalidDataException ex)
+            {
+                MessageBox.Show(this, ex.Message, "无法解密", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!ConfirmOverwrite("将导入 " + payload.Servers.Count + " 台服务器、" + payload.Groups.Count +
+                                  " 个分组，覆盖当前 " + _cfg.Servers.Count + " 台服务器。")) return;
+
+            DisconnectAll();
+            AppConfig imported = PortableConfig.ToLocal(payload, _cfg.Settings);
+            ConfigStore.Save(imported);
+            ReloadConfig();
+            MessageBox.Show(this,
+                "已导入 " + _cfg.Servers.Count + " 台服务器，密码已转为本机加密，可直接连接。",
+                "导入完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            ShowMsg("便携配置已导入，共 " + _cfg.Servers.Count + " 台服务器");
+        }
+
+        /// <summary>普通导出：保留本机 DPAPI 密文，换机需重新输入密码。</summary>
+        private void ExportStandard()
         {
             using (SaveFileDialog d = new SaveFileDialog())
             {
-                d.Title = "导出配置";
-                d.FileName = "config.json";
+                d.Title = "普通导出配置（换机需重输密码）";
+                d.Filter = "ServerMaster 配置 (*.json)|*.json|所有文件 (*.*)|*.*";
+                d.DefaultExt = "json";
+                d.AddExtension = true;
+                d.FileName = "ServerMaster-配置-" + DateTime.Now.ToString("yyyyMMdd") + ".json";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
                     ConfigStore.Save(_cfg);
                     File.Copy(ConfigStore.ConfigFile, d.FileName, true);
                     MessageBox.Show(this,
-                        "已导出。注意: 服务器密码为 DPAPI 加密，仅在本机本 Windows 账户下可解，导入其他机器后需重新录入密码。",
+                        "已导出 " + _cfg.Servers.Count + " 台服务器。\n\n" +
+                        "密码仍是本机 Windows 账户加密的密文，换到其他电脑导入后无法解密，需要逐台重新输入密码。\n" +
+                        "如需换机直接使用，请改用“便携导出（换机导入即用）”。",
                         "导出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, "导出失败: " + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        /// <summary>便携导出：整份清单用访问密码加密，任意电脑导入即可用。</summary>
+        private void ExportPortable()
+        {
+            using (SaveFileDialog d = new SaveFileDialog())
+            {
+                d.Title = "便携导出配置（含加密密码）";
+                d.Filter = "ServerMaster 便携配置 (*.smc)|*.smc|所有文件 (*.*)|*.*";
+                d.DefaultExt = "smc";
+                d.AddExtension = true;
+                d.FileName = "ServerMaster-便携配置-" + DateTime.Now.ToString("yyyyMMdd") + ".smc";
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+
+                string pwd;
+                using (PassphraseDialog dlg = new PassphraseDialog(
+                    "设置访问密码",
+                    "便携配置文件包含服务器密码，将用此密码整体加密。导入方输入同一密码即可直接连接。",
+                    true, "导出"))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    pwd = dlg.Passphrase;
+                }
+
+                try
+                {
+                    ConfigStore.Save(_cfg);
+                    int unreadable;
+                    int count = PortableConfig.Export(_cfg, d.FileName, pwd, out unreadable);
+                    string msg = "已便携导出 " + count + " 台服务器（含密码）。\n\n" +
+                                 "请通过安全渠道把文件与访问密码分别告知接收方；密码遗忘后文件无法恢复。";
+                    if (unreadable > 0)
+                        msg += "\n\n注意：有 " + unreadable + " 台服务器的密码在本机无法解密（可能来自其他电脑），" +
+                               "导出时密码为空，接收方需手动补录。";
+                    MessageBox.Show(this, msg, "导出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
                 catch (Exception ex)
                 {
@@ -1101,8 +1471,18 @@ namespace ServerMaster.UI
                 if (r != DialogResult.Yes) { e.Cancel = true; return; }
             }
 
-            _cfg.Settings.WindowWidth = Width;
-            _cfg.Settings.WindowHeight = Height;
+            Rectangle bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            _cfg.Settings.WindowLeft = bounds.Left;
+            _cfg.Settings.WindowTop = bounds.Top;
+            _cfg.Settings.WindowWidth = bounds.Width;
+            _cfg.Settings.WindowHeight = bounds.Height;
+            _cfg.Settings.WindowPositionSaved = true;
+            _cfg.Settings.WindowMaximized = (WindowState == FormWindowState.Maximized);
+            if (_split != null)
+            {
+                _cfg.Settings.ShowServerPanel = !_split.Panel1Collapsed;
+                if (!_split.Panel1Collapsed) _cfg.Settings.ServerPanelWidth = _split.SplitterDistance;
+            }
             try { ConfigStore.Save(_cfg); } catch { }
 
             Application.RemoveMessageFilter(_broadcast);

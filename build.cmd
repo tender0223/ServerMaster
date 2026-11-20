@@ -27,7 +27,7 @@ set RSP=%TEMP%\servermaster_sources.rsp
 dir /s /b src\ServerMaster\*.cs > "%RSP%"
 
 echo [1/2] Compiling...
-"%CSC%" /nologo /t:winexe /platform:anycpu /utf8output /out:build\ServerMaster.new.exe /r:lib\AxMSTSCLib.dll /r:lib\MSTSCLib.dll /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "@%RSP%"
+"%CSC%" /nologo /t:winexe /platform:anycpu /utf8output /out:build\ServerMaster.new.exe /win32icon:src\ServerMaster\app.ico /resource:src\ServerMaster\app.ico,ServerMaster.app.ico /resource:lib\AxMSTSCLib.dll,ServerMaster.AxMSTSCLib.dll /resource:lib\MSTSCLib.dll,ServerMaster.MSTSCLib.dll /r:lib\AxMSTSCLib.dll /r:lib\MSTSCLib.dll /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "@%RSP%"
 if errorlevel 1 (
     echo [FAILED] Compile errors - see output above.
     del "%RSP%" 2>nul

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Windows.Forms;
 using ServerMaster.Models;
 
@@ -14,29 +15,31 @@ namespace ServerMaster.UI
     {
         private readonly TextBox _txtSearch;
         private readonly TreeView _tree;
-        private readonly Button _btnAdd;
-        private readonly Button _btnEdit;
         private readonly Button _btnDelete;
         private readonly Button _btnConnect;
         private readonly Button _btnDisconnect;
-        private readonly Button _btnDeleteAll;
+        private readonly ToolTip _tip;
         private readonly ContextMenuStrip _serverMenu;
         private readonly ContextMenuStrip _groupMenu;
         private AppConfig _cfg;
         private string _filter = "";
         private readonly Dictionary<string, bool> _checkState = new Dictionary<string, bool>();
+        // 中文 Windows 下按当前区域文化排序（汉字通常按拼音），忽略大小写
+        private static readonly StringComparer NameComparer =
+            StringComparer.Create(CultureInfo.CurrentCulture, true);
 
-        public event Action AddRequested;
         public event Action<ServerInfo> EditRequested;
         public event Action<ServerInfo> DeleteRequested;
+        /// <summary>一键连接所有勾选的服务器。</summary>
+        public event Action ConnectCheckedRequested;
+        /// <summary>批量断开勾选的服务器（参数：目标列表）。</summary>
+        public event Action<List<ServerInfo>> DisconnectCheckedRequested;
         public event Action<ServerInfo> ConnectRequested;
         public event Action<ServerInfo> DisconnectRequested;
         /// <summary>连接整组服务器（参数：分组名）。</summary>
         public event Action<string> ConnectGroupRequested;
         /// <summary>删除某分组下的全部服务器（参数：分组名）。</summary>
         public event Action<string> DeleteGroupRequested;
-        /// <summary>删除全部服务器。</summary>
-        public event Action DeleteAllRequested;
         /// <summary>删除勾选的服务器（组节点勾选会联动组内全部服务器）。</summary>
         public event Action<List<ServerInfo>> DeleteCheckedRequested;
         /// <summary>拖拽服务器到另一个分组（参数：服务器, 目标分组名）。</summary>
@@ -60,26 +63,30 @@ namespace ServerMaster.UI
             _txtSearch.TextChanged += delegate { _filter = _txtSearch.Text.Trim(); Rebind(); };
             Controls.Add(_txtSearch);
 
-            FlowLayoutPanel buttons = new FlowLayoutPanel();
+            TableLayoutPanel buttons = new TableLayoutPanel();
             buttons.Location = new Point(4, 32);
-            buttons.Size = new Size(240, 56);
+            buttons.Size = new Size(240, 30);
+            buttons.Anchor = AnchorStyles.Top | AnchorStyles.Left;
+            buttons.ColumnCount = 3;
+            buttons.RowCount = 1;
+            for (int i = 0; i < 3; i++) buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
+            buttons.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            _btnAdd = MakeButton("添加", delegate { if (AddRequested != null) AddRequested(); });
-            _btnConnect = MakeButton("连接", delegate { OnConnectSelected(); });
-            _btnDisconnect = MakeButton("断开", delegate { OnDisconnectSelected(); });
-            _btnEdit = MakeButton("编辑", delegate { OnEditSelected(); });
-            _btnDelete = MakeButton("删除勾选", delegate { OnDeleteChecked(); });
-            _btnDeleteAll = MakeButton("全部删除", delegate { if (DeleteAllRequested != null) DeleteAllRequested(); });
-            buttons.Controls.Add(_btnAdd);
-            buttons.Controls.Add(_btnConnect);
-            buttons.Controls.Add(_btnDisconnect);
-            buttons.Controls.Add(_btnEdit);
-            buttons.Controls.Add(_btnDelete);
-            buttons.Controls.Add(_btnDeleteAll);
+            _btnConnect = MakeButton("连接", delegate { OnConnectClicked(); });
+            _btnDisconnect = MakeButton("断开", delegate { OnDisconnectClicked(); });
+            _btnDelete = MakeButton("删除", delegate { OnDeleteChecked(); });
+            buttons.Controls.Add(_btnConnect, 0, 0);
+            buttons.Controls.Add(_btnDisconnect, 1, 0);
+            buttons.Controls.Add(_btnDelete, 2, 0);
             Controls.Add(buttons);
 
+            _tip = new ToolTip();
+            _tip.SetToolTip(_btnConnect, "勾选多台时批量连接；未勾选时连接当前选中的服务器");
+            _tip.SetToolTip(_btnDisconnect, "勾选多台时批量断开；未勾选时断开当前选中的服务器");
+            _tip.SetToolTip(_btnDelete, "删除勾选的服务器；未勾选时删除当前选中的服务器");
+
             _tree = new TreeView();
-            _tree.Location = new Point(0, 92);
+            _tree.Location = new Point(0, 64);
             _tree.Size = new Size(250, 400);
             _tree.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             _tree.CheckBoxes = true;
@@ -161,8 +168,13 @@ namespace ServerMaster.UI
             Controls.Add(_tree);
 
             // 树在按钮下方自适应
-            _tree.SetBounds(0, 92, Width, Math.Max(60, Height - 92));
-            Resize += delegate { _tree.SetBounds(0, 92, Width, Math.Max(60, Height - 92)); _txtSearch.Width = Math.Max(60, Width - 60); };
+            _tree.SetBounds(0, 64, Width, Math.Max(60, Height - 64));
+            Resize += delegate
+            {
+                _tree.SetBounds(0, 64, Width, Math.Max(60, Height - 64));
+                _txtSearch.Width = Math.Max(60, Width - 60);
+                buttons.SetBounds(4, 32, Math.Max(120, Width - 8), 30);
+            };
         }
 
         /// <summary>拖拽落点对应的分组名（服务器节点=其所属组，分组节点=组名）。</summary>
@@ -231,9 +243,9 @@ namespace ServerMaster.UI
         {
             Button b = new Button();
             b.Text = text;
-            b.AutoSize = true;
-            b.Padding = new Padding(4, 0, 4, 0);
-            b.Margin = new Padding(1);
+            b.AutoSize = false;
+            b.Dock = DockStyle.Fill;
+            b.Margin = new Padding(2, 1, 2, 1);
             b.Click += onClick;
             return b;
         }
@@ -264,28 +276,79 @@ namespace ServerMaster.UI
                     TreeNode gNode = new TreeNode(g);
                     gNode.Tag = g; // 分组节点 Tag = 分组名
                     gNode.ForeColor = Color.FromArgb(90, 120, 200);
-                    bool anyShown = false;
+
+                    List<ServerInfo> members = new List<ServerInfo>();
                     foreach (ServerInfo s in _cfg.Servers)
                     {
                         if (s.Group != g) continue;
                         if (_filter.Length > 0 &&
                             s.DisplayName.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0 &&
                             s.Host.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        members.Add(s);
+                    }
+                    members.Sort(CompareServers);
+
+                    foreach (ServerInfo s in members)
+                    {
                         TreeNode sNode = new TreeNode(s.DisplayName + "  (" + s.Host + ")");
                         sNode.Tag = s;
                         bool chk;
                         if (_checkState.TryGetValue(s.Id, out chk)) sNode.Checked = chk;
                         gNode.Nodes.Add(sNode);
-                        anyShown = true;
                     }
-                    if (anyShown || _filter.Length == 0) _tree.Nodes.Add(gNode);
-                    if (anyShown) gNode.Expand();
+                    if (members.Count > 0 || _filter.Length == 0) _tree.Nodes.Add(gNode);
+                    if (members.Count > 0) gNode.Expand();
                 }
             }
             finally
             {
                 _tree.EndUpdate();
             }
+        }
+
+        /// <summary>组内排序：先按显示名，再按主机，最后按端口。</summary>
+        private static int CompareServers(ServerInfo a, ServerInfo b)
+        {
+            int c = CompareNatural(a.DisplayName, b.DisplayName);
+            if (c != 0) return c;
+            c = CompareNatural(a.Host, b.Host);
+            if (c != 0) return c;
+            return a.Port.CompareTo(b.Port);
+        }
+
+        /// <summary>自然排序：数字段按数值比较（北少云2 排在 北少云10 之前），其余按当前文化比较。</summary>
+        private static int CompareNatural(string a, string b)
+        {
+            if (a == null) a = "";
+            if (b == null) b = "";
+            int i = 0, j = 0;
+            while (i < a.Length && j < b.Length)
+            {
+                bool da = char.IsDigit(a[i]);
+                bool db = char.IsDigit(b[j]);
+                int si = i, sj = j;
+                if (da && db)
+                {
+                    while (i < a.Length && char.IsDigit(a[i])) i++;
+                    while (j < b.Length && char.IsDigit(b[j])) j++;
+                    int na = i - si, nb = j - sj;
+                    while (na > 1 && a[si] == '0') { si++; na--; }
+                    while (nb > 1 && b[sj] == '0') { sj++; nb--; }
+                    if (na != nb) return na < nb ? -1 : 1;
+                    int c = string.CompareOrdinal(a, si, b, sj, na);
+                    if (c != 0) return c;
+                }
+                else
+                {
+                    while (i < a.Length && !char.IsDigit(a[i])) i++;
+                    while (j < b.Length && !char.IsDigit(b[j])) j++;
+                    int c = NameComparer.Compare(a.Substring(si, i - si), b.Substring(sj, j - sj));
+                    if (c != 0) return c;
+                }
+            }
+            if (i < a.Length) return 1;
+            if (j < b.Length) return -1;
+            return NameComparer.Compare(a, b);
         }
 
         private void CollectCheckState(TreeNode node)
@@ -335,6 +398,40 @@ namespace ServerMaster.UI
                 n = n.Parent;
             }
             return null;
+        }
+
+        /// <summary>连接按钮：优先连接勾选的服务器，未勾选时连接选中的一台。</summary>
+        private void OnConnectClicked()
+        {
+            List<ServerInfo> targets = GetCheckedServers();
+            if (targets.Count > 0)
+            {
+                if (ConnectCheckedRequested != null) ConnectCheckedRequested();
+                return;
+            }
+            ServerInfo sel = SelectedServer();
+            if (sel != null)
+            {
+                if (ConnectRequested != null) ConnectRequested(sel);
+            }
+            else if (ConnectCheckedRequested != null)
+            {
+                // 什么都没有时交给主窗口提示"请先勾选"
+                ConnectCheckedRequested();
+            }
+        }
+
+        /// <summary>断开按钮：优先断开勾选的服务器，未勾选时断开选中的一台。</summary>
+        private void OnDisconnectClicked()
+        {
+            List<ServerInfo> targets = GetCheckedServers();
+            if (targets.Count == 0)
+            {
+                ServerInfo sel = SelectedServer();
+                if (sel != null) targets.Add(sel);
+            }
+            if (targets.Count > 0 && DisconnectCheckedRequested != null)
+                DisconnectCheckedRequested(targets);
         }
 
         private void OnConnectSelected()

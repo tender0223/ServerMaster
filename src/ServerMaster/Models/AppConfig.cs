@@ -15,6 +15,17 @@ namespace ServerMaster.Models
         /// <summary>默认远端桌面分辨率——固定值，不随分格大小变化，画面仅做显示端缩放。</summary>
         public int DesktopWidth { get; set; }
         public int DesktopHeight { get; set; }
+        /// <summary>已连接分格标题显示内容：0=备注名，1=不显示，2=主机名，3=主机IP+端口。</summary>
+        public int SessionTitleMode { get; set; }
+        /// <summary>是否显示左侧服务器列表栏。</summary>
+        public bool ShowServerPanel { get; set; }
+        /// <summary>左侧服务器列表栏宽度（像素）。</summary>
+        public int ServerPanelWidth { get; set; }
+        /// <summary>窗口位置是否已保存过（未保存时不强制设置坐标，交给系统默认摆放）。</summary>
+        public bool WindowPositionSaved { get; set; }
+        public int WindowLeft { get; set; }
+        public int WindowTop { get; set; }
+        public bool WindowMaximized { get; set; }
 
         public AppSettings()
         {
@@ -26,6 +37,13 @@ namespace ServerMaster.Models
             DragDropRemoteDir = "";
             DesktopWidth = 1920;
             DesktopHeight = 1080;
+            SessionTitleMode = 0;
+            ShowServerPanel = true;
+            ServerPanelWidth = 260;
+            WindowPositionSaved = false;
+            WindowLeft = 0;
+            WindowTop = 0;
+            WindowMaximized = false;
         }
     }
 
